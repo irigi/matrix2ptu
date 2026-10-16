@@ -376,11 +376,11 @@ arrival times. No correction is applied.
 5. **Not implemented:** bidirectional and harmonic scanning, multiple frames (code paths
    exist, but are untested for lack of data), pixel markers (none in the data), and the
    "dummy"/"overflow" record types (not observed).
-6. **Memory:** conversion peaks at about 5× the `.raw` size (2.9 GB for the 600 MB
-   file, was 7.2 GB before the changes in BACKLOG.md item A). Validation needs more
-   (7.2 GB in total) because the independent readers decode the whole PTU. The whole
-   `.raw` is still read into memory; arbitrarily large files would need chunked
-   processing ([BACKLOG.md](BACKLOG.md) item C).
+6. **Memory:** conversion peaks at about 2.5× the `.raw` size (1.5 GB for the 600 MB
+   file; it was 7.2 GB before BACKLOG.md items A and B). The `.raw` is read block-wise and
+   the sync records are never held in memory. The per-photon arrays are still held in
+   full, so memory grows with the photon count. Validation needs more (7.3 GB in total)
+   because the independent readers decode the whole PTU ([BACKLOG.md](BACKLOG.md) item D).
 7. **Format stability:** the stream layout is "V5" (Abberior). Other firmware versions may
    differ. The decoder checks its assumptions (time order, sync regularity, marker counts)
    and stops with an explanation if they fail.

@@ -203,3 +203,47 @@ def test_write_ptu_t3_blockwise_identical(tmp_path):
     write_ptu(str(tmp_path / "a.ptu"), tags, encode_t3_fast(nsync, channel, dtime, special))
     write_ptu_t3(str(tmp_path / "b.ptu"), tags, nsync, channel, dtime, special, block=333)
     assert (tmp_path / "a.ptu").read_bytes() == (tmp_path / "b.ptu").read_bytes()
+
+
+def test_streamed_pulse_train_identical(tmp_path, monkeypatch):
+    """Pulse train re-read block-wise from the file == in-memory version,
+    with small blocks so that block edges, halos and gaps are exercised."""
+    path, t_sync, _ = _synthetic_stream(tmp_path, n_sync=6000)
+    monkeypatch.setattr(rawstream, "BLOCK_WORDS", 211)
+    ev = rawstream.decode(path, keep_sync=True)
+    # drop a few sync words to create gaps
+    w = np.fromfile(path, dtype="<u4")
+    is_sync = ((w >> 31) == 1) & (((w >> 26) & 0x1F) == 23)
+    drop = np.flatnonzero(is_sync)[[700, 1500, 1501, 4000]]
+    p2 = tmp_path / "gaps.raw"
+    np.delete(w, drop).tofile(p2)
+    ev = rawstream.decode(str(p2), keep_sync=True)
+    rng = np.random.default_rng(2)
+    table = np.sort(rng.uniform(0, 1, 1024))
+    S = ev.sy_coarse.astype(np.float64) + table[ev.sy_code]
+    ref = timing.pulse_train_from_times(S.copy(), 32, 64, block=97)
+    st = timing.streamed_pulse_train(ev.sync, table, 32, 64, block=97)
+    assert st.n_missing_sync == ref.n_missing_sync == 4
+    assert st.ticks_per_sync == ref.ticks_per_sync and st.jitter_ticks_rms == ref.jitter_ticks_rms
+    t = np.concatenate([rng.uniform(S[0] - 50, S[-1] + 50, 3000), ref.sync_times[::7]])
+    for a, b in zip(ref.locate(t), st.locate(t)):
+        assert np.array_equal(a, b)
+    assert np.array_equal(ref.outside_mask(t), st.outside_mask(t))
+
+
+def test_smoothed_block_chunking_identical():
+    """The chunked moving mean must equal the one-shot version bit for bit."""
+    rng = np.random.default_rng(4)
+    n, half, block = 1000, 32, 300
+    S = 50 + 78.333 * np.arange(n) + rng.normal(scale=0.003, size=n)
+    raw = lambda a, b: S[a:b].copy()
+    line = lambda a, b: 50 + 78.333 * np.arange(a, b)
+    for j in range(4):
+        one = timing._smoothed_block(raw, line, n, half, block, j, chunk=10 ** 9)
+        for chunk in (1, 7, 64, 299):
+            assert np.array_equal(one, timing._smoothed_block(raw, line, n, half, block, j, chunk=chunk))
+    # and equal to the in-memory reference
+    ref = S.copy()
+    timing._smooth_inplace(ref, lambda a, b: S[a:b] - line(a, b), half, block)
+    got = np.concatenate([timing._smoothed_block(raw, line, n, half, block, j, chunk=13) for j in range(4)])
+    assert np.array_equal(ref, got)

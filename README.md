@@ -102,10 +102,12 @@ Outputs go to the directory given in the config, e.g. `outputs/Matrix/`:
 Exit code: 0 = ok, 1 = error (message explains what to fix), 2 = a validation check failed.
 Set `MATRIX2PTU_DEBUG=1` to see full Python tracebacks.
 
-Runtime / peak memory (this PC): Matrix.raw (90 MB) 2 s / 0.6 GB; Sequence.raw (600 MB)
-25 s / 2.9 GB. Conversion memory is about 5× the .raw size. `--validate` needs much more:
-7.2 GB and ~70 s in total for Sequence.raw, because the independent readers load the
-whole PTU. See [docs/BACKLOG.md](docs/BACKLOG.md).
+Runtime / peak memory (this PC): Matrix.raw (90 MB) 3 s / 0.44 GB; Sequence.raw (600 MB)
+31 s / 1.5 GB. Conversion memory is about 2.5× the .raw size. Most of it is the photons
+(about 45 bytes per photon at the peak). The sync records are re-read from the file
+instead of being kept in memory. `--validate` needs much more: 7.3 GB and ~75 s in total
+for Sequence.raw, because the independent readers load the whole PTU. See
+[docs/BACKLOG.md](docs/BACKLOG.md).
 
 ## 3. Configuration
 

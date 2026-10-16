@@ -35,8 +35,16 @@ def code_density_table(codes: np.ndarray, reverse_taps: bool = True,
 
     The value is the centre of the code's bin.  Unused codes get NaN.
     """
-    return table_from_histogram(np.bincount(codes.astype(np.int64), minlength=N_CODES),
-                                reverse_taps, min_counts)
+    return table_from_histogram(code_histogram(codes), reverse_taps, min_counts)
+
+
+def code_histogram(codes: np.ndarray) -> np.ndarray:
+    """1024-bin histogram of TDC codes, computed in blocks (no int64 copy of
+    the whole input)."""
+    h = np.zeros(N_CODES, np.int64)
+    for s0 in range(0, codes.size, BLOCK):
+        h += np.bincount(codes[s0:s0 + BLOCK], minlength=N_CODES)
+    return h
 
 
 def table_from_histogram(hist: np.ndarray, reverse_taps: bool = True,
@@ -73,6 +81,13 @@ class TdcCalibration:
     @classmethod
     def from_events(cls, ph_element, ph_code, sy_code, sync_element=23,
                     reverse_taps=True):
+        return cls.from_histograms(ph_element, ph_code, code_histogram(sy_code),
+                                   sync_element, reverse_taps)
+
+    @classmethod
+    def from_histograms(cls, ph_element, ph_code, sync_hist, sync_element=23,
+                        reverse_taps=True):
+        """As from_events(), with the sync channel given as a code histogram."""
         # one joint histogram (element x code), built in blocks: no per-element
         # copies of the photon arrays
         n_el = int(ph_element.max()) + 1 if ph_element.size else 0
@@ -86,7 +101,7 @@ class TdcCalibration:
         for e in range(n_el):
             if hist[e].sum():
                 tables[e] = table_from_histogram(hist[e], reverse_taps, min_counts=1000)
-        tables[sync_element] = code_density_table(sy_code, reverse_taps)
+        tables[sync_element] = table_from_histogram(sync_hist, reverse_taps)
         return cls(tables, "code-density (self-calibrated from this file)")
 
     def fine_one(self, element: int, code: np.ndarray) -> np.ndarray:
@@ -95,16 +110,6 @@ class TdcCalibration:
         if np.isnan(out).any():
             raise ValueError(f"element {element}: TDC codes without calibration value")
         return out
-
-    def add_fine_inplace(self, element: int, code: np.ndarray, t: np.ndarray) -> None:
-        """t += fine time of `code` (all from one element), block-wise.
-        Same result as t += fine_one(element, code) without the full-size temporary."""
-        tab = self.tables[int(element)]
-        for s0 in range(0, code.size, BLOCK):
-            f = tab[code[s0:s0 + BLOCK]]
-            if np.isnan(f).any():
-                raise ValueError(f"element {element}: TDC codes without calibration value")
-            t[s0:s0 + BLOCK] += f
 
     def fine(self, element: np.ndarray, code: np.ndarray) -> np.ndarray:
         out = np.empty(code.size)

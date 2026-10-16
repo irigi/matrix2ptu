@@ -53,7 +53,7 @@ class DecodedAcquisition:
     period); these are only needed by validate.py and cost 16 bytes/photon.
     """
 
-    BLOCK = 4_000_000     # photons per block (bounds temporary memory)
+    BLOCK = 1_000_000     # photons per block (bounds temporary memory)
 
     def __init__(self, cfg: dict, r: Resolved, meta: dict | None,
                  keep_validation_data: bool = False):
@@ -61,7 +61,7 @@ class DecodedAcquisition:
         raw = cfg["input"]["raw"]
         t0 = time.time()
         log(f"decoding {raw}")
-        ev = rawstream.decode(raw, sync_element=r["sync_element"])
+        ev = rawstream.decode(raw, sync_element=r["sync_element"], keep_sync=False)
         self.summary = rawstream.summarize(ev)
         log(f"  {self.summary['photons']} photon records, {self.summary['sync_records']} sync records, "
             f"markers {self.summary['markers_by_bits(frame,line,pixel)']} ({time.time()-t0:.1f} s)")
@@ -86,16 +86,12 @@ class DecodedAcquisition:
         if r["tdc_calibration_file"]:
             cal = tdc.TdcCalibration.load(r["tdc_calibration_file"])
         else:
-            cal = tdc.TdcCalibration.from_events(el, code, ev.sy_code, r["sync_element"])
+            cal = tdc.TdcCalibration.from_histograms(el, code, ev.sync.code_hist, r["sync_element"])
         self.cal = cal
 
-        # --- pulse train (built in the memory of the sync coarse-time array) --------
-        S = timing.coarse_to_float_inplace(ev.sy_coarse)
-        ev.sy_coarse = None
-        cal.add_fine_inplace(r["sync_element"], ev.sy_code, S)
-        ev.sy_code = None
-        pt = timing.pulse_train_from_times(S, r["sync_divider"], r["sync_smoothing_window"])
-        del S
+        # --- pulse train: sync records are re-read from the file block-wise ----------
+        pt = timing.streamed_pulse_train(ev.sync, cal.tables[r["sync_element"]],
+                                         r["sync_divider"], r["sync_smoothing_window"])
         self.pt = pt
         if pt.n_missing_sync:
             r.warn(f"{pt.n_missing_sync} sync records missing in the stream (bridged; "
@@ -128,6 +124,13 @@ class DecodedAcquisition:
         element = np.empty(n, np.uint8)
         t_all = np.empty(n, np.float64) if keep_validation_data else None
         ph_all = np.empty(n, np.float64) if keep_validation_data else None
+        # scan markers are located in the same sweep as the photons (the pulse
+        # train is recomputed block by block, so one sweep is much cheaper than two)
+        off_ticks = r["line_start_offset_us"] * 1e-6 / self.tick_s
+        mk_t = np.concatenate([self.line_t + off_ticks, self.frame_t])
+        mk_order = np.argsort(mk_t, kind="stable")
+        mk_pulse = np.empty(mk_t.size, np.int64)
+        mk_done = 0
         j = 0
         for s0 in range(0, n, self.BLOCK):
             s1 = min(n, s0 + self.BLOCK)
@@ -135,8 +138,15 @@ class DecodedAcquisition:
             t = coarse[s0:s1] + cal.fine(e, code[s0:s1]) + delays_ps[e] * 1e-12 / self.tick_s
             keep = ~pt.outside_mask(t)
             t, e = t[keep], e[keep]
-            p, phase = pt.locate(t)
+            # markers up to the end of this block's time range go along
+            mk_new = mk_done + int(np.searchsorted(mk_t[mk_order[mk_done:]], t.max(), side="right")) \
+                if t.size else mk_done
+            mk_idx = mk_order[mk_done:mk_new]
             k = t.size
+            p, phase = pt.locate(np.concatenate([t, mk_t[mk_idx]]))
+            mk_pulse[mk_idx] = p[k:]
+            p, phase = p[:k], phase[:k]
+            mk_done = mk_new
             pulse[j:j + k] = p
             dtime[j:j + k] = np.minimum(np.floor(phase * self.Tp / res), self.n_bins - 1)
             element[j:j + k] = e
@@ -144,6 +154,9 @@ class DecodedAcquisition:
                 t_all[j:j + k] = t
                 ph_all[j:j + k] = phase
             j += k
+        if mk_done < mk_t.size:
+            mk_idx = mk_order[mk_done:]
+            mk_pulse[mk_idx], _ = pt.locate(mk_t[mk_idx])
         del el, code, coarse, ev
         self.n_dropped_outside_sync = int(n - j)
         if self.n_dropped_outside_sync:
@@ -167,12 +180,11 @@ class DecodedAcquisition:
         self.t, self.phase = t_all, ph_all
 
         # --- markers in pulse units ---------------------------------------------------
-        off_ticks = r["line_start_offset_us"] * 1e-6 / self.tick_s
-        self.line_pulse, _ = pt.locate(self.line_t + off_ticks)
-        self.frame_pulse, _ = pt.locate(self.frame_t) if self.frame_t.size else (np.empty(0, np.int64), None)
+        self.line_pulse = mk_pulse[:self.line_t.size]
+        self.frame_pulse = mk_pulse[self.line_t.size:]
         self.line_len_pulses = int(round(r["pixels_x"] * r["pixel_dwell_us"] * 1e-6 / self.Tp))
         self.stop_pulse = self.line_pulse + self.line_len_pulses
-        pt.sync_times = None    # the pulse train is no longer needed; free its memory
+        pt.release()            # the pulse train is no longer needed; free its memory
 
         # line pass index and sequence for every photon (validation / split)
         self.pass_of_photon = np.empty(self.pulse.size, np.int32)
