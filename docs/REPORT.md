@@ -263,7 +263,7 @@ Validation command: `matrix2ptu convert <cfg> --validate`. Full results are in
 | S1 structure: ptufile reads the header and records; record count; event times monotonic; dtime < 5000 | PASS | PASS |
 | S2 photons per channel = source (no loss) | PASS, 2 100 822 | PASS, 33 676 048 |
 | S2 markers: 400/400/1 and 3500/3500/1 (start/stop/frame) | PASS | PASS |
-| S3 exact round trip: every photon's (nsync, dtime, channel) | PASS | PASS |
+| S3 exact round trip: every photon's (nsync, dtime, channel), in file order | PASS | PASS |
 | S4 PTU micro time vs raw-derived micro time | PASS, ≤ 2.50 ps (half a bin) | PASS |
 | I1 image from PTU markers vs image computed directly from raw time stamps | PASS: identical to pulse-based; 0.006 % of photons shift by a delay/pulse | PASS: 0.029 % |
 | I2 image via **tttrkit** (FLOPA engine) vs own PTU image | PASS, identical; (1, 1, 400, 400, 23) | PASS, identical; **(1, 2, 500, 500, 23)** |
@@ -379,8 +379,9 @@ arrival times. No correction is applied.
 6. **Memory:** conversion peaks at about 2.5× the `.raw` size (1.5 GB for the 600 MB
    file; it was 7.2 GB before BACKLOG.md items A and B). The `.raw` is read block-wise and
    the sync records are never held in memory. The per-photon arrays are still held in
-   full, so memory grows with the photon count. Validation needs more (7.3 GB in total)
-   because the independent readers decode the whole PTU ([BACKLOG.md](BACKLOG.md) item D).
+   full, so memory grows with the photon count. With `--validate` the total is 2.7 GB:
+   validation keeps 16 more bytes per photon and reads the PTU files block by block
+   ([BACKLOG.md](BACKLOG.md) item D).
 7. **Format stability:** the stream layout is "V5" (Abberior). Other firmware versions may
    differ. The decoder checks its assumptions (time order, sync regularity, marker counts)
    and stops with an explanation if they fail.

@@ -247,3 +247,35 @@ def test_smoothed_block_chunking_identical():
     timing._smooth_inplace(ref, lambda a, b: S[a:b] - line(a, b), half, block)
     got = np.concatenate([timing._smoothed_block(raw, line, n, half, block, j, chunk=13) for j in range(4)])
     assert np.array_equal(ref, got)
+
+
+def test_iter_ptu_records_blockwise(tmp_path):
+    """Block-wise ptufile decoding with the overflow carry == one full decode,
+    including blocks that end in overflow records and gaps > 1023 wraps."""
+    ptufile = pytest.importorskip("ptufile")
+    from matrix2ptu.validate import iter_ptu_records
+    rng = np.random.default_rng(11)
+    n = 3000
+    nsync = np.sort(rng.integers(0, 3_000_000, n))
+    nsync[2000:] += 5_000_000
+    special = (rng.uniform(size=n) < 0.05).astype(np.uint8)
+    channel = np.where(special == 1, 1, rng.integers(0, 23, n)).astype(np.uint8)
+    dtime = np.where(special == 1, 0, rng.integers(0, 5000, n)).astype(np.uint16)
+    tags = [("File_GUID", "{0}"), ("Measurement_Mode", 3), ("Measurement_SubMode", 3),
+            ("MeasDesc_GlobalResolution", 25e-9), ("MeasDesc_Resolution", 5e-12),
+            ("TTResult_SyncRate", 40_000_000), ("TTResult_NumberOfRecords", 0),
+            ("TTResultFormat_TTTRRecType", 0x01010304), ("TTResultFormat_BitsPerRecord", 32)]
+    path = str(tmp_path / "t.ptu")
+    write_ptu(path, tags, encode_t3_fast(nsync, channel, dtime, special))
+    p = ptufile.PtuFile(path)
+    full = p.decode_records()
+    p.close()
+    for chunk in (5, 17, 1000, 10 ** 6):
+        parts = list(iter_ptu_records(path, chunk))
+        assert sum(d.size for _, d, _ in parts) == full.size
+        for s0, d, t in parts:
+            f = full[s0:s0 + d.size]
+            ev = (f["channel"] >= 0) | (f["marker"] > 0)
+            assert np.array_equal(t[ev], f["time"][ev].astype(np.int64))
+            for name in ("dtime", "channel", "marker"):
+                assert np.array_equal(d[name], f[name])

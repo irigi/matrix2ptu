@@ -88,15 +88,47 @@ combined and split per sequence. Validation: 23/23 and 25/25. Unit tests: 12/12,
 including streamed vs in-memory pulse train with gaps and tiny blocks, and chunked
 vs one-shot smoothing.
 
+### D. Memory of `--validate`  *(done 2026-10-16)*
+
+**Problem.** With validation, Sequence.raw peaked at 7.3 GB, against 1.5 GB for the
+conversion alone. Three things were held at full size: the whole PTU decoded by
+ptufile, full-length temporaries in the image reconstructions, and full `lexsort`s
+for the round-trip check.
+
+**What was changed** (`validate.py`):
+* `iter_ptu_records` decodes each PTU with ptufile in blocks of 2 M records, adding
+  the overflow carry. Every block ends on a photon or marker record (trailing overflow
+  records start the next block), so the carry is exact. A block that holds only
+  overflow records grows until it reaches an event.
+* Two passes per file:
+  1. structure, counts, round trip and timing (S1–S4); markers are collected here;
+  2. images and histograms (I1, D1, D2): the histograms are accumulated, and the
+     D2 per-element shifts come from one (channel × dtime) histogram.
+* **S3 now compares in file order** instead of sorting both sides. The writer
+  keeps the converter's order, so this check is stricter than before. If it fails,
+  the old order-independent comparison runs to say whether only the order differs.
+* The S4 RMS is combined block-wise (Chan et al.); the printed values are unchanged.
+* `image_from_raw` works in blocks of photons.
+
+**Result** (peak resident memory and run time, conversion + `--validate`):
+
+| file | before | after |
+|---|---|---|
+| Matrix.raw | 1.24 GB, 6.5 s | 1.16 GB, 5.4 s |
+| Sequence.raw | 7.31 GB, 75 s | **2.67 GB**, 52 s |
+
+The remaining peak is the conversion with the validation data kept: 16 bytes per
+photon for the absolute time and phase. For Matrix it is tttrkit's reconstruction.
+
+**Acceptance — met:**
+* `validation_report.json` and `raw_image.npy` are identical to the previous version
+  for both datasets (all check texts, notes and per-element offsets).
+* The PTU outputs are unchanged.
+* Validating the split per-sequence files passes (16 checks).
+* Unit tests: 13/13. New test: block-wise decoding == full decode, with blocks
+  of 5–17 records and gaps of more than 1023 wraps.
+
 ## Open
-
-### D. Memory of `--validate`
-
-With validation, Sequence.raw still peaks at 7.3 GB, against 1.5 GB for the conversion alone. Validation decodes
-the whole PTU with ptufile (twice: resolved and pooled), sorts it for the event
-round trip and builds images at full size. Options: validate in blocks of records;
-compare sorted per-pulse digests instead of full lexsorts; free the decoded records
-between files.
 
 ### Discussed, not scheduled
 
