@@ -14,6 +14,53 @@ format, how the conversion works, the validation results and the limitations.
 
 ---
 
+## Step-by-step guide
+
+1. **Install once** (details in §1):
+   ```bash
+   python3 -m venv .venv && source .venv/bin/activate
+   pip install -e ".[validate,dev]"
+   ```
+2. **Collect the input files** of one measurement: the `.raw` file (required)
+   and the `.msr` file of the same measurement (strongly recommended). The
+   `.raw` has no header: without the `.msr`, image size, dwell time, sequence
+   structure, laser frequency and per-element delays must be written in the
+   config.
+3. **Inspect the raw file** (optional, helps to fill in the config):
+   ```bash
+   matrix2ptu inspect inputs/Matrix.raw --msr inputs/Matrix.msr
+   ```
+4. **Write a YAML config for this dataset.** Copy the closest example,
+   [`configs/matrix.yaml`](configs/matrix.yaml) (one sequence) or
+   [`configs/sequence.yaml`](configs/sequence.yaml) (line-interleaved
+   sequences), and edit at least:
+   * `input.raw`, `input.msr` and `output.directory`
+   * `output.modes`, and `output.split_sequences: true` if you need one PTU per sequence (e.g. for SymPhoTime)
+   * `scan.*`: image size, pixel size, dwell **per line pass**
+   * `acquisition.sequences`: name and `line_accumulation` of each sequence, in acquisition order
+   * leave the `timing.*` delays and laser frequency as `auto` when the `.msr` is available
+
+   All keys are explained in §3.
+5. **Dry run:** checks all parameters and writes only the report, no PTU:
+   ```bash
+   matrix2ptu convert configs/mydata.yaml --dry-run
+   ```
+   Read the printed values, their sources and any warnings, and fix the config if needed.
+6. **Convert and validate:**
+   ```bash
+   matrix2ptu convert configs/mydata.yaml --validate
+   # single-sequence data with a reference intensity image:
+   matrix2ptu convert configs/matrix.yaml --validate --tif inputs/Intensity.tif
+   ```
+   `--no-flopa` skips the tttrkit/FLOPA check. Exit code 0 = ok, 1 = error,
+   2 = a validation check failed.
+7. **Check the outputs** in `output.directory` (table in §2), especially
+   `*_conversion_report.json` and `validation_report.json`.
+8. **Open the PTU files** in FLOPA or SymPhoTime (§4). In FLOPA set the line
+   accumulations to match the config, e.g. `(1)` for Matrix, `(2, 5)` for Sequence.
+
+---
+
 ## 1. Installation (Linux/macOS/Windows, Python ≥ 3.10)
 
 ```bash
