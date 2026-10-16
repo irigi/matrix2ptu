@@ -1,0 +1,15 @@
+# Large/raw experimental data - not tracked
+inputs/
+outputs/
+*.raw
+*.ptu
+*.tif
+*.tiff
+*.obf
+
+# Python
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+*.egg-info/
