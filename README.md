@@ -103,7 +103,8 @@ Exit code: 0 = ok, 1 = error (message explains what to fix), 2 = a validation ch
 Set `MATRIX2PTU_DEBUG=1` to see full Python tracebacks.
 
 Runtime/memory (this PC): Matrix.raw (90 MB) 2 s / 1.3 GB; Sequence.raw (600 MB) 20 s / 7 GB.
-Memory scales with file size (≈12× the .raw size).
+Memory scales with file size (≈12× the .raw size); `--validate` adds about 1 GB and ~50 s for
+Sequence.raw. Planned reductions: [docs/BACKLOG.md](docs/BACKLOG.md).
 
 ## 3. Configuration
 

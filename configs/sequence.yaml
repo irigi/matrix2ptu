@@ -5,12 +5,13 @@
 #   pass 3-7 : sequence 1 (STAR RED_STED)  -> line accumulation 5
 # then the scanner moves to the next y-line.
 #
-# NOTE: the Sequence.msr provided shows a different field of view than
-# Sequence.raw (see docs/REPORT.md); its *settings* match, its images do not.
+# Metadata: Sequence2.msr is the .msr of this acquisition. (The first file
+# supplied, Sequence.msr, has the same settings but shows a different field of
+# view; see docs/REPORT.md.)
 
 input:
   raw: inputs/Sequence.raw
-  msr: inputs/Sequence.msr
+  msr: inputs/Sequence2.msr
 
 output:
   directory: outputs/Sequence

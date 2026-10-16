@@ -33,10 +33,15 @@ Each statement is labelled with how strongly it is supported:
    period 7: [24.1k, 24.1k, 3.8k ×5] (Fig. 6). The **51 µs dwell applies to each
    individual pass [V]**. Imspector reports 102 µs (2 × 51) and 255 µs (5 × 51) as the
    accumulated per-channel dwell.
-4. **The provided `Sequence.msr` is not from the same acquisition as `Sequence.raw` [V].**
-   Its images show a different field of view (r ≈ −0.07, Fig. 6). Its *settings*
-   are consistent with the raw file. Quantitative image comparison for Sequence therefore
-   needs the matching `.msr` (or matching reference images).
+4. **Sequence.raw also reproduces Imspector's result [V]**, compared with
+   `Sequence2.msr` (the `.msr` of the same acquisition, supplied later):
+   * CONF: 24 130 286 vs 24 130 141 counts, r = 1.0000, 78 % of pixels identical;
+   * STED: 9 536 834 vs 9 536 787 counts, r = 1.0000, 90 % of pixels identical;
+   * decays: same peak bin, L1 = 0.005 (CONF) and 0.019 (STED). The remaining difference
+     is a constant time offset of about 10 ps; with it removed, χ²/bin = 1.0 and 2.3 (§5).
+
+   The first file supplied, `Sequence.msr`, has the same settings but shows a different
+   field of view (r ≈ −0.07) and is not used any more.
 5. **Outputs:** detector-resolved PTU (23 channels) and pooled PTU (1 channel), both
    HydraHarp-v2/MultiHarp T3 records, the same record type Imspector writes. Both are
    read correctly by ptufile, tttrkit and **napari-flopa's own core functions**, including
@@ -50,7 +55,8 @@ Each statement is labelled with how strongly it is supported:
 |---|---|---|
 | `Matrix.raw` (90 MB) | yes | headerless stream of 22 511 854 32-bit little-endian words, followed by 784 zero words of padding |
 | `Sequence.raw` (597 MB) | yes | 149 160 181 words, followed by 777 zero words of padding |
-| `Matrix.msr`, `Sequence.msr` | yes | OBF container (Imspector 2025.10, spec 16.3): full parameter tree (XML) plus Imspector's TCSPC image cubes (Y × X × 250 bins of 100 ps, int16) and one 250-bin stack each (`Data010`/`Data008`, probably a whole-image decay; not used) |
+| `Matrix.msr`, `Sequence2.msr` | yes | OBF container (Imspector 2025.10, spec 16.3): full parameter tree (XML) plus Imspector's TCSPC image cubes (Y × X × 250 bins of 100 ps, int16) and one 250-bin stack each (`Data010` / `STAR RED_STED {1} [Pop]`, probably a whole-image decay; not used) |
+| `Sequence.msr` | yes | same settings as `Sequence2.msr`, but a **different acquisition** (different field of view); superseded |
 | `SPAD.ptu` | yes | PTU written by **Imspector** for a MultiHarp 150 (400 × 400, 100 µs). Used as the template for record type, marker bits and image tags |
 | `Intensity.tif` | yes | 400 × 400 **8-bit RGB colour rendering** (colour table applied), not photon counts. Usable only for correlation and orientation checks |
 
@@ -128,8 +134,9 @@ The calibration tables are saved with each conversion and can be re-used.
   (`sync_source/input = -1`, 200 MHz ÷ 5). The data show exactly 1 632 000.000 pulses per
   line period.
 * **Sequence.raw:** `sync_source/input = 1`, external. **The STED laser is the master
-  clock.** Measured from the data: **40 000 566 Hz**; Imspector's own measurement in the
-  `.msr` is 40 000 567 Hz, so they agree to 0.03 ppm. The PTU sync rate and global
+  clock.** Measured from the data: **40 000 566 Hz**. Imspector's own reading stored in
+  `Sequence2.msr` (same acquisition) is 40 000 561 Hz, a difference of 0.13 ppm (the other
+  `.msr` stored 40 000 567 Hz, so Imspector's reading drifts by a few Hz between sessions). The PTU sync rate and global
   resolution use the measured frequency.
 * Is the sync wired into the MATRIX? **Yes [V].** The sync appears as element 23, and the
   ExpControl FPGA's sync output to the `Matrix1` stream is marked "required" in the `.msr`.
@@ -158,8 +165,10 @@ The calibration tables are saved with each conversion and can be re-used.
 
 ### 3.6 Comparison with Imspector's pixel assignment [V + U]
 
-* 97 % of pixels are identical.
-* The differing photons (≈ 0.12 %) lie within ~200 ns of a pixel edge. Imspector's pixel
+* Matrix: 97 % of pixels are identical. Sequence: 78 % (CONF) and 90 % (STED); these
+  images have more photons per pixel, so more pixels contain an edge photon. The share of
+  photons involved is similar: 0.13 % (CONF) and 0.14 % (STED).
+* The differing photons (Matrix ≈ 0.12 %) lie within ~200 ns of a pixel edge. Imspector's pixel
   grid appears shifted by about −140 ± 55 ns, varying from line to line. The rule
   Imspector uses is **unresolved [U]**.
 * The effect is ≤ 0.2 % of the dwell and negligible for FLIM. `scan.line_start_offset_us`
@@ -258,8 +267,8 @@ Validation command: `matrix2ptu convert <cfg> --validate`. Full results are in
 | S4 PTU micro time vs raw-derived micro time | PASS, ≤ 2.50 ps (half a bin) | PASS |
 | I1 image from PTU markers vs image computed directly from raw time stamps | PASS: identical to pulse-based; 0.006 % of photons shift by a delay/pulse | PASS: 0.029 % |
 | I2 image via **tttrkit** (FLOPA engine) vs own PTU image | PASS, identical; (1, 1, 400, 400, 23) | PASS, identical; **(1, 2, 500, 500, 23)** |
-| I3 image vs Imspector cube in `.msr` | PASS: r = 0.9998, 97.0 % identical pixels | FAIL: **different acquisition** (r ≈ −0.07) |
-| D1 decay vs Imspector cube | PASS: L1 = 0.0097, χ²/bin = 2.3, same peak bin | INFO (shape only): CONF L1 = 0.006, STED L1 = 0.040 |
+| I3 image vs Imspector cube in `.msr` (`Sequence2.msr` for Sequence) | PASS: r = 0.9998, 97.0 % identical pixels | PASS: r = 1.0000; CONF 78.3 %, STED 90.0 % identical pixels; totals differ by 145 and 47 photons |
+| D1 decay vs Imspector cube | PASS: L1 = 0.0097, χ²/bin = 2.3, same peak bin | PASS: same peak bin; CONF L1 = 0.005, χ²/bin = 20; STED L1 = 0.019, χ²/bin = 48 (see note) |
 | I4 vs Intensity.tif (RGB rendering) | PASS: r = 0.935 (red channel) | n/a |
 | D2 per-element alignment after delay correction | PASS: 29 ps RMS | PASS: 32 ps RMS |
 
@@ -278,10 +287,20 @@ Additional checks:
   r = 0.95, with the best match at zero line shift. The STED image shows the expected gain
   in resolution (Fig. 6).
 
+**Note on D1 (micro time offset vs Imspector) [V + U].** The χ²/bin for Sequence looks
+high because these decays have 10–24 M photons, so even tiny shape differences are
+significant. Shifting the converted micro times by a constant brings the agreement down to
+the Poisson limit: +10 ps gives χ²/bin 1.0 (CONF) and 2.3 (STED); for Matrix the best
+shift is +5 ps (χ²/bin 0.9). So the converter's micro times are 5–10 ps earlier than
+Imspector's. About 2.5 ps of this is expected, because the converter floors times into
+5 ps bins. The rest is a convention difference whose origin is unknown [U] (for example
+TDC calibration details or bin edges). It is far below the timing jitter (25–37 ps) and
+Imspector's 100 ps bins, and irrelevant for lifetimes; it only matters for absolute
+arrival times. No correction is applied.
+
 **What was *not* tested:**
 * SymPhoTime: not available here.
 * The napari GUI of FLOPA: only its core functions were run.
-* Quantitative per-pixel agreement for Sequence.raw: the matching reference is missing.
 
 ---
 
@@ -343,8 +362,7 @@ Additional checks:
 
 ## 9. Limitations and open questions
 
-1. **Matching `Sequence.msr` / reference images needed [U]** for a quantitative Sequence
-   validation. The settings in the provided `.msr` match; the field of view does not.
+1. **Micro time offset vs Imspector:** 5–10 ps, constant, origin unresolved (§5) [U].
 2. **TDC calibration** is self-derived (code density), not Abberior's. Agreement with
    Imspector: same decay shape, with small differences (≤ ~20 ps) on the steep rising edge.
    Files with few photons per element (< ~10⁴) give poorer tables. In that case, re-use a
@@ -358,16 +376,17 @@ Additional checks:
 5. **Not implemented:** bidirectional and harmonic scanning, multiple frames (code paths
    exist, but are untested for lack of data), pixel markers (none in the data), and the
    "dummy"/"overflow" record types (not observed).
-6. **Memory:** about 12× the `.raw` size (7 GB for the 600 MB file). Very large files would
-   need chunked processing.
+6. **Memory:** about 12× the `.raw` size (peak 8.5 GB with validation for the 600 MB
+   file). Most of it is sync records (77–91 % of all words), not photons. Planned
+   reductions are in [BACKLOG.md](BACKLOG.md).
 7. **Format stability:** the stream layout is "V5" (Abberior). Other firmware versions may
    differ. The decoder checks its assumptions (time order, sync regularity, marker counts)
    and stops with an explanation if they fail.
 
 ## 10. Recommended next steps
 
-1. Provide `Sequence.msr` or reference images from **the same** acquisition, and rerun
-   `matrix2ptu convert configs/sequence.yaml --validate`.
+1. Always save the `.msr` together with the `.raw` of each acquisition. It provides the
+   settings and the reference for validation.
 2. Test the PTU files in SymPhoTime (start with pooled Matrix). If needed, try
    `hw_type: "MultiHarp 150 4P"` and `split_sequences: true`.
 3. Open the files in the FLOPA GUI to confirm what the headless test showed.

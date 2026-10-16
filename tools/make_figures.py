@@ -26,9 +26,9 @@ plt.rcParams.update({
 })
 
 
-def decode(name):
+def decode(name, msr=None):
     ev = rawstream.decode(f"inputs/{name}.raw")
-    meta = read_msr_metadata(f"inputs/{name}.msr")
+    meta = read_msr_metadata(f"inputs/{msr or name}.msr")
     cal = tdc.TdcCalibration.from_events(ev.ph_element, ev.ph_code, ev.sy_code)
     sf = cal.fine_one(23, ev.sy_code)
     pt = timing.build_pulse_train(ev.sy_coarse, sf)
@@ -157,7 +157,7 @@ plt.close(fig)
 del ev, fine, t, pp, ph, pp2, ph2
 
 # ---- F6: Sequence pass structure and images ------------------------------------
-ev, meta, cal, sf, pt, line, tick = decode("Sequence")
+ev, meta, cal, sf, pt, line, tick = decode("Sequence", msr="Sequence2")
 k = np.searchsorted(line, ev.ph_coarse, side="right") - 1
 rel = (ev.ph_coarse - line[np.clip(k, 0, None)]) * tick
 inl = (k >= 0) & (rel < 25.5e-3)
@@ -171,10 +171,10 @@ for sel in (p < 2, p >= 2):
     im = np.zeros((500, 500), int)
     np.add.at(im, (k[m] // 7, x[m]), 1)
     imgs.append(im)
-cubes = list(read_flim_stacks("inputs/Sequence.msr").values())
+cubes = list(read_flim_stacks("inputs/Sequence2.msr").values())
 
 fig = plt.figure(figsize=(10, 6.2))
-gs = fig.add_gridspec(2, 3, height_ratios=[1, 1.25], hspace=0.45)
+gs = fig.add_gridspec(2, 4, height_ratios=[1, 1.25], hspace=0.45)
 a = fig.add_subplot(gs[0, :])
 means = cnt.mean(0)
 cols = [C1, C1, C2, C2, C2, C2, C2]
@@ -186,9 +186,10 @@ a.set_xlabel("line pass within each y-line (marker index mod 7)")
 a.set_ylabel("photons per pass (thousands)")
 a.set_title("Sequence.raw: per y-line 2 CONF passes (blue) then 5 STED passes (orange)", color=INK, fontsize=9)
 a.grid(axis="x", visible=False)
-for j, (im, ttl) in enumerate([(imgs[0], "CONF from .raw/PTU (2 passes)"),
-                               (imgs[1], "STED from .raw/PTU (5 passes)"),
-                               (cubes[0].sum(-1), "CONF in Sequence.msr: different field!")]):
+for j, (im, ttl) in enumerate([(imgs[0], "CONF from .raw (2 passes)"),
+                               (cubes[0].reshape(500, 500, -1).sum(-1), "CONF, Imspector (Sequence2.msr)"),
+                               (imgs[1], "STED from .raw (5 passes)"),
+                               (cubes[1].reshape(500, 500, -1).sum(-1), "STED, Imspector (Sequence2.msr)")]):
     b = fig.add_subplot(gs[1, j])
     b.imshow(im, cmap="gray", vmin=0, vmax=np.percentile(im, 99.5))
     b.set_title(ttl, color=INK, fontsize=9)
