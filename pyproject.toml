@@ -1,0 +1,20 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "matrix2ptu"
+version = "0.1.0"
+description = "Convert Abberior MATRIX (SPAD23) .raw photon streams to PicoQuant PTU"
+requires-python = ">=3.10"
+dependencies = ["numpy", "pyyaml"]
+
+[project.optional-dependencies]
+validate = ["ptufile", "tifffile", "tttrkit", "xarray", "scipy", "matplotlib"]
+dev = ["pytest"]
+
+[project.scripts]
+matrix2ptu = "matrix2ptu.__main__:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]

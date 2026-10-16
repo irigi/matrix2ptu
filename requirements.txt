@@ -1,6 +1,10 @@
 matplotlib==3.11.2
+napari-flopa @ git+https://github.com/cockovaz/napari-flopa@9602fcde659a707e2c44c888b083711a1cc58686   # optional, headless FLOPA check
 numpy==2.5.4
 ptufile==2026.8.8
 pytest==9.1.1
 PyYAML==6.0.3
+scipy==1.18.1
 tifffile==2026.10.15
+tttrkit==0.1.6
+xarray==2026.9.0

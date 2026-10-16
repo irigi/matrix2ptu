@@ -1,0 +1,52 @@
+# Dataset B: Sequence.raw  (two sequences, line-interleaved, 500 x 500)
+# Acquisition order per y-line (user description, confirmed by the .msr line
+# steps [2, 5] and by the photon counts per pass in the raw stream):
+#   pass 1-2 : sequence 0 (STAR RED_CONF)  -> line accumulation 2
+#   pass 3-7 : sequence 1 (STAR RED_STED)  -> line accumulation 5
+# then the scanner moves to the next y-line.
+#
+# NOTE: the Sequence.msr provided shows a different field of view than
+# Sequence.raw (see docs/REPORT.md); its *settings* match, its images do not.
+
+input:
+  raw: inputs/Sequence.raw
+  msr: inputs/Sequence.msr
+
+output:
+  directory: outputs/Sequence
+  modes: [detector_resolved, pooled]
+  split_sequences: false          # true: additionally one PTU per sequence
+  overwrite: true
+  hw_type: "Abberior MATRIX (SPAD23) converted"   # for SymPhoTime tests try "MultiHarp 150 4P"
+
+scan:
+  pixels_x: 500
+  pixels_y: 500
+  pixel_size_um: 0.02             # 10 um field of view / 500
+  pixel_dwell_us: 51              # per single line pass (NOT multiplied by accumulation)
+  dwell_convention: per_line_pass
+  bidirectional: false
+  scan_type: linear
+  frames: 1
+  line_start_offset_us: 0.0
+
+acquisition:
+  mode: line_interleaved
+  sequences:                      # order = order of acquisition within each y-line
+    - name: STAR_RED_CONF
+      line_accumulation: 2
+    - name: STAR_RED_STED
+      line_accumulation: 5
+
+detector:
+  n_elements: 23
+  sync_element: 23
+  sync_divider: 32
+
+timing:
+  laser_frequency_hz: auto        # here the STED laser is the master clock (~40.00057 MHz)
+  microtime_resolution_ps: 5
+  apply_element_delays: true
+  element_delays_ps: auto
+  common_delay_ps: auto
+  sync_smoothing_window: 64

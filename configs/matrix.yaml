@@ -1,0 +1,45 @@
+# Dataset A: Matrix.raw  (single sequence, 400 x 400, 100 us, 1 line accumulation)
+# Values marked "auto" are taken from the .msr file of the same measurement.
+# Explicit values below are the user's experimental parameters (primary
+# reference); they are cross-checked against the .msr and the raw stream.
+
+input:
+  raw: inputs/Matrix.raw
+  msr: inputs/Matrix.msr          # optional, strongly recommended
+
+output:
+  directory: outputs/Matrix
+  modes: [detector_resolved, pooled]
+  split_sequences: false
+  overwrite: true
+  hw_type: "Abberior MATRIX (SPAD23) converted"   # for SymPhoTime tests try "MultiHarp 150 4P"
+
+scan:
+  pixels_x: 400
+  pixels_y: 400
+  pixel_size_um: 0.05             # 20 um field of view / 400
+  pixel_dwell_us: 100             # per line pass
+  dwell_convention: per_line_pass
+  bidirectional: false            # monodirectional
+  scan_type: linear               # not harmonic
+  frames: 1
+  line_start_offset_us: 0.0       # shift of the pixel grid vs. the line marker
+
+acquisition:
+  mode: line_interleaved          # one sequence is the trivial case
+  sequences:
+    - name: Alexa488_CONF
+      line_accumulation: 1
+
+detector:
+  n_elements: 23                  # SPAD pixels = record elements 0..22
+  sync_element: 23                # laser sync record (every 32nd pulse)
+  sync_divider: 32
+
+timing:
+  laser_frequency_hz: auto        # measured: pulses per line x line frequency (.msr)
+  microtime_resolution_ps: 5      # PTU dtime bin width
+  apply_element_delays: true
+  element_delays_ps: auto         # Imspector's per-element delays from the .msr
+  common_delay_ps: auto           # Imspector's common delay (-12.8 ns) from the .msr
+  sync_smoothing_window: 64
