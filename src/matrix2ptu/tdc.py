@@ -26,6 +26,7 @@ import numpy as np
 N_CODES = 1024
 TAPS = 256
 QUARTERS = 4
+BLOCK = 4_000_000     # events per block in the block-wise helpers
 
 
 def code_density_table(codes: np.ndarray, reverse_taps: bool = True,
@@ -34,7 +35,14 @@ def code_density_table(codes: np.ndarray, reverse_taps: bool = True,
 
     The value is the centre of the code's bin.  Unused codes get NaN.
     """
-    h = np.bincount(codes.astype(np.int64), minlength=N_CODES).astype(float)
+    return table_from_histogram(np.bincount(codes.astype(np.int64), minlength=N_CODES),
+                                reverse_taps, min_counts)
+
+
+def table_from_histogram(hist: np.ndarray, reverse_taps: bool = True,
+                         min_counts: int = 10000) -> np.ndarray:
+    """As code_density_table(), from a 1024-bin code histogram."""
+    h = np.asarray(hist).astype(float)
     if h.sum() < min_counts:
         raise ValueError(
             f"only {int(h.sum())} events available for TDC calibration (need >= {min_counts}); "
@@ -65,10 +73,19 @@ class TdcCalibration:
     @classmethod
     def from_events(cls, ph_element, ph_code, sy_code, sync_element=23,
                     reverse_taps=True):
+        # one joint histogram (element x code), built in blocks: no per-element
+        # copies of the photon arrays
+        n_el = int(ph_element.max()) + 1 if ph_element.size else 0
+        hist = np.zeros(n_el * N_CODES, np.int64)
+        for s0 in range(0, ph_element.size, BLOCK):
+            key = ph_element[s0:s0 + BLOCK].astype(np.int64) * N_CODES
+            key += ph_code[s0:s0 + BLOCK]
+            hist += np.bincount(key, minlength=hist.size)
+        hist = hist.reshape(n_el, N_CODES)
         tables = {}
-        for e in np.unique(ph_element):
-            tables[int(e)] = code_density_table(ph_code[ph_element == e], reverse_taps,
-                                                min_counts=1000)
+        for e in range(n_el):
+            if hist[e].sum():
+                tables[e] = table_from_histogram(hist[e], reverse_taps, min_counts=1000)
         tables[sync_element] = code_density_table(sy_code, reverse_taps)
         return cls(tables, "code-density (self-calibrated from this file)")
 
@@ -78,6 +95,16 @@ class TdcCalibration:
         if np.isnan(out).any():
             raise ValueError(f"element {element}: TDC codes without calibration value")
         return out
+
+    def add_fine_inplace(self, element: int, code: np.ndarray, t: np.ndarray) -> None:
+        """t += fine time of `code` (all from one element), block-wise.
+        Same result as t += fine_one(element, code) without the full-size temporary."""
+        tab = self.tables[int(element)]
+        for s0 in range(0, code.size, BLOCK):
+            f = tab[code[s0:s0 + BLOCK]]
+            if np.isnan(f).any():
+                raise ValueError(f"element {element}: TDC codes without calibration value")
+            t[s0:s0 + BLOCK] += f
 
     def fine(self, element: np.ndarray, code: np.ndarray) -> np.ndarray:
         out = np.empty(code.size)

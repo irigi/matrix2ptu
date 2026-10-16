@@ -39,7 +39,8 @@ def main(argv=None):
                 print(json.dumps(m, indent=2, default=str))
         elif args.cmd == "convert":
             from .converter import convert
-            res = convert(args.config, only_validate_inputs=args.dry_run)
+            res = convert(args.config, only_validate_inputs=args.dry_run,
+                          keep_validation_data=args.validate)
             if args.validate and not args.dry_run:
                 from .validate import validate
                 out = validate(res, tif_path=args.tif, run_flopa=not args.no_flopa)

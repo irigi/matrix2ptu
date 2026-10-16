@@ -160,7 +160,46 @@ def test_matrix_integration(tmp_path):
     cfg["output"]["directory"] = str(tmp_path)
     cp = tmp_path / "cfg.yaml"
     yaml.safe_dump(cfg, open(cp, "w"))
-    res = convert(str(cp))
+    res = convert(str(cp), keep_validation_data=True)
     out = validate(res, tif_path=os.path.join(ROOT, "inputs", "Intensity.tif"), run_flopa=True)
     failed = [c for c in out["checks"] if c["passed"] is False]
     assert not failed, failed
+
+
+# --------------------------------------------------------------------------- #
+# Block-wise processing must give exactly the same result as one block.
+def test_decode_blockwise_identical(tmp_path, monkeypatch):
+    path, _, _ = _synthetic_stream(tmp_path)
+    whole = rawstream.decode(path)
+    monkeypatch.setattr(rawstream, "BLOCK_WORDS", 97)
+    blocks = rawstream.decode(path)
+    for f in ("ph_element", "ph_code", "ph_coarse", "sy_code", "sy_coarse",
+              "mk_bits", "mk_coarse", "mk_word"):
+        assert np.array_equal(getattr(whole, f), getattr(blocks, f)), f
+    assert whole.max_backstep == blocks.max_backstep
+
+
+def test_pulse_train_blockwise_identical():
+    rng = np.random.default_rng(7)
+    keep = np.setdiff1d(np.arange(5000), [700, 1500, 1501, 4999 - 40])
+    S = 50 + 78.333 * keep + rng.normal(scale=0.003, size=keep.size)
+    a = timing.pulse_train_from_times(S.copy(), 32, 64, block=10 ** 9)
+    b = timing.pulse_train_from_times(S.copy(), 32, 64, block=101)
+    assert np.array_equal(a.sync_times, b.sync_times)
+    assert np.array_equal(a.gap_pos, b.gap_pos) and np.array_equal(a.gap_cum, b.gap_cum)
+    assert a.ticks_per_sync == b.ticks_per_sync and a.jitter_ticks_rms == b.jitter_ticks_rms
+
+
+def test_write_ptu_t3_blockwise_identical(tmp_path):
+    from matrix2ptu.ptu_writer import write_ptu_t3
+    rng = np.random.default_rng(9)
+    n = 5000
+    nsync = np.sort(rng.integers(0, 5_000_000, n))
+    nsync[3000:] += 2_000_000          # a gap needing more than 1023 wraps
+    special = np.zeros(n, np.uint8)
+    channel = rng.integers(0, 23, n).astype(np.uint8)
+    dtime = rng.integers(0, 5000, n).astype(np.uint16)
+    tags = [("File_GUID", "{0}"), ("TTResult_NumberOfRecords", 0)]
+    write_ptu(str(tmp_path / "a.ptu"), tags, encode_t3_fast(nsync, channel, dtime, special))
+    write_ptu_t3(str(tmp_path / "b.ptu"), tags, nsync, channel, dtime, special, block=333)
+    assert (tmp_path / "a.ptu").read_bytes() == (tmp_path / "b.ptu").read_bytes()

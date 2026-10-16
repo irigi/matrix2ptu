@@ -97,9 +97,10 @@ def build_header(tags: list[tuple]) -> tuple[bytes, int]:
 
 
 def encode_t3(nsync: np.ndarray, channel: np.ndarray, dtime: np.ndarray,
-              special: np.ndarray) -> np.ndarray:
+              special: np.ndarray, hi_prev: int = 0) -> np.ndarray:
     """Encode time-sorted events (absolute nsync, int64) into T3 records,
-    inserting overflow records.  Returns uint32 array."""
+    inserting overflow records.  Returns uint32 array.  `hi_prev` is the
+    number of wraps already emitted (for block-wise encoding)."""
     nsync = np.asarray(nsync, dtype=np.int64)
     if nsync.size and (np.diff(nsync) < 0).any():
         raise ValueError("events are not sorted by nsync")
@@ -116,7 +117,7 @@ def encode_t3(nsync: np.ndarray, channel: np.ndarray, dtime: np.ndarray,
     prev = np.concatenate([[0], hi[:-1]])
     need = hi - prev
     if need.size:
-        need[0] = hi[0]
+        need[0] = hi[0] - hi_prev
     # Each overflow record carries up to 1023 wraps; events needing more get
     # several overflow records.
     n_ovf = np.where(need > 0, (need + 1022) // 1023, 0)
@@ -141,15 +142,15 @@ def encode_t3(nsync: np.ndarray, channel: np.ndarray, dtime: np.ndarray,
     return out
 
 
-def encode_t3_fast(nsync, channel, dtime, special):
+def encode_t3_fast(nsync, channel, dtime, special, hi_prev: int = 0):
     """Vectorised variant of encode_t3 for the common case where no gap
     exceeds 1023 wraps (always true here: markers/photons are dense, and
     sync-derived nsync gaps of >26 ms would be needed). Falls back otherwise."""
     nsync = np.asarray(nsync, dtype=np.int64)
     hi = nsync // WRAP
-    need = np.diff(np.concatenate([[0], hi]))
+    need = np.diff(hi, prepend=np.int64(hi_prev))
     if (need > 1023).any() or (need < 0).any():
-        return encode_t3(nsync, channel, dtime, special)
+        return encode_t3(nsync, channel, dtime, special, hi_prev)
     has = need > 0
     total = nsync.size + int(has.sum())
     out = np.empty(total, dtype=np.uint32)
@@ -168,9 +169,30 @@ def write_ptu(path: str, tags: list[tuple], records: np.ndarray) -> None:
     header, nrec_off = build_header(tags)
     with open(path, "wb") as f:
         f.write(header)
-        records.astype("<u4").tofile(f)
+        records.astype("<u4", copy=False).tofile(f)
         f.seek(nrec_off)
         f.write(struct.pack("<q", int(records.size)))
+
+
+def write_ptu_t3(path: str, tags: list[tuple], nsync, channel, dtime, special,
+                 block: int = 4_000_000) -> int:
+    """Encode time-sorted events and write them, block by block (the full
+    record array is never held in memory).  Byte-identical to
+    write_ptu(path, tags, encode_t3_fast(...)).  Returns the record count."""
+    header, nrec_off = build_header(tags)
+    nrec = 0
+    hi_prev = 0
+    with open(path, "wb") as f:
+        f.write(header)
+        for s0 in range(0, len(nsync), block):
+            sl = slice(s0, s0 + block)
+            rec = encode_t3_fast(nsync[sl], channel[sl], dtime[sl], special[sl], hi_prev)
+            rec.astype("<u4", copy=False).tofile(f)
+            nrec += rec.size
+            hi_prev = int(nsync[sl][-1]) // WRAP
+        f.seek(nrec_off)
+        f.write(struct.pack("<q", nrec))
+    return nrec
 
 
 def new_guid() -> str:

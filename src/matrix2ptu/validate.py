@@ -129,6 +129,9 @@ def flopa_reconstruct(path, r, max_detector=64):
 
 def validate(result: dict, tif_path: str | None = None, run_flopa: bool = True) -> dict:
     acq: DecodedAcquisition = result["acq"]
+    if acq.t is None:
+        raise ValueError("validation needs the per-photon data kept during conversion: "
+                         "call convert(..., keep_validation_data=True)")
     rep = result["report"]
     meta = result["meta"]
     r = acq.r

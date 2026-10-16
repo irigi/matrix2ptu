@@ -99,38 +99,102 @@ def build_pulse_train(sync_coarse, sync_fine, divider=32, smooth_window=64,
                       max_jitter_fraction=0.25) -> PulseTrain:
     S = sync_coarse.astype(np.float64)
     S += sync_fine
-    d = np.diff(S)
-    med = float(np.median(d[: min(d.size, 1_000_000)]))
-    steps = np.rint(d / med).astype(np.int32)
-    if (steps < 1).any():
-        raise ValueError("sync records closer together than expected - is the sync element correct?")
-    d /= np.maximum(steps, 1)
-    dev = float(np.abs(d - med).max())
-    del d
+    return pulse_train_from_times(S, divider, smooth_window, max_jitter_fraction)
+
+
+def coarse_to_float_inplace(a: np.ndarray, block: int = 4_000_000) -> np.ndarray:
+    """Convert an int64 array to float64 in its own memory (exact below 2**53;
+    unwrapped coarse times are far below).  The int64 array must not be used
+    afterwards.  Returns the float64 view."""
+    if a.dtype != np.int64:
+        raise TypeError("expected int64")
+    f = a.view(np.float64)
+    for s0 in range(0, a.size, block):
+        f[s0:s0 + block] = a[s0:s0 + block].astype(np.float64)
+    return f
+
+
+def pulse_train_from_times(S: np.ndarray, divider=32, smooth_window=64,
+                           max_jitter_fraction=0.25, block: int = 4_000_000) -> PulseTrain:
+    """Build the pulse train from sync times S (ticks, float64).
+
+    S is modified in place and becomes PulseTrain.sync_times (no copies of the
+    full array are made; all temporaries are block-sized).
+    """
+    n = S.size
+    if n < 3:
+        raise ValueError("fewer than 3 sync records; cannot build the pulse train")
+    med = float(np.median(np.diff(S[: min(n, 1_000_001)])))
+    # interval check and gap detection, block-wise
+    dev = 0.0
+    gaps, gap_steps = [], []
+    for s0 in range(0, n - 1, block):
+        s1 = min(n - 1, s0 + block)
+        d = np.diff(S[s0:s1 + 1])
+        steps = np.rint(d / med).astype(np.int32)
+        if (steps < 1).any():
+            raise ValueError("sync records closer together than expected - is the sync element correct?")
+        d /= np.maximum(steps, 1)
+        dev = max(dev, float(np.abs(d - med).max()))
+        g = np.flatnonzero(steps > 1)
+        gaps.append(g + s0)
+        gap_steps.append(steps[g])
     if dev > max_jitter_fraction * med:
         raise ValueError(
             f"sync intervals are irregular (max deviation {dev:.2f} ticks of {med:.2f}); "
             "the sync is not a stable pulse train")
-    gaps = np.flatnonzero(steps > 1)
+    gaps = np.concatenate(gaps)
     gap_pos = (gaps + 1).astype(np.int64)                 # record index after the gap
-    gap_cum = np.cumsum(steps[gaps].astype(np.int64) - 1)
+    gap_cum = np.cumsum(np.concatenate(gap_steps).astype(np.int64) - 1)
     n_missing = int(gap_cum[-1]) if gap_cum.size else 0
-    del steps
     pt = PulseTrain(S, gap_pos, gap_cum, divider, 0.0, 0.0, n_missing)
-    last = int(pt.sync_index(np.array([S.size - 1]))[0])
-    # straight line through the ends, then smooth the residual (blockwise)
-    slope = (S[-1] - S[0]) / last
-    block = 4_000_000
-    r = np.empty_like(S)
-    for s0 in range(0, S.size, block):
-        k = np.arange(s0, min(S.size, s0 + block))
-        r[s0:s0 + k.size] = S[s0:s0 + k.size] - (S[0] + slope * pt.sync_index(k))
-    kk = min(r.size, 2_000_000)
-    jitter = float(np.diff(r[:kk], 2).std() / np.sqrt(6))
-    sm = _moving_mean(r, max(1, smooth_window // 2), block)
-    S -= r
-    S += sm
-    del r, sm
+    last = int(pt.sync_index(np.array([n - 1]))[0])
+    # straight line through the ends; smooth the residual from it with a
+    # centred moving mean, then replace S by line + smoothed residual
+    S0 = float(S[0])
+    slope = (S[-1] - S0) / last
+
+    def resid(a, b):
+        k = np.arange(a, b)
+        return S[a:b] - (S0 + slope * pt.sync_index(k))
+
+    kk = min(n, 2_000_000)
+    jitter = float(np.diff(resid(0, kk), 2).std() / np.sqrt(6))
+    half = max(1, smooth_window // 2)
+    _smooth_inplace(S, resid, half, block)
     pt.jitter_ticks_rms = jitter
     pt.ticks_per_sync = float((S[-1] - S[0]) / last)
     return pt
+
+
+def _smooth_inplace(S, resid, half, block):
+    """S <- S - r + moving_mean(r), r = resid(a, b) (the residual from the
+    reference line).  Same arithmetic as _moving_mean() on the full residual
+    array, but in place: the original values needed by the next block (its
+    left halo) are saved before a block is overwritten."""
+    n = S.size
+    if n < 2 * half + 1:
+        r = resid(0, n)
+        S -= r
+        S += r.mean()
+        return
+    saved = None            # original S values just before the current block
+    for s0 in range(0, n, block):
+        s1 = min(n, s0 + block)
+        a = max(0, s0 - half)
+        b = min(n, s1 + half)
+        r = resid(a, b)
+        if saved is not None:
+            # S[a:s0] was overwritten by the previous block: use the saved originals
+            r[: s0 - a] = saved
+        c = np.concatenate([[0.0], np.cumsum(r)])
+        i = np.arange(s0, s1)
+        lo = np.maximum(i - half, 0) - a
+        hi = np.minimum(i + half + 1, n) - a
+        sm = (c[hi] - c[lo]) / (hi - lo)
+        # residual of the next block's left halo, from original values
+        nxt = max(s0, s1 - half)
+        saved = r[nxt - a: s1 - a].copy()
+        rb = r[s0 - a: s1 - a]
+        S[s0:s1] -= rb
+        S[s0:s1] += sm

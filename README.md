@@ -102,9 +102,10 @@ Outputs go to the directory given in the config, e.g. `outputs/Matrix/`:
 Exit code: 0 = ok, 1 = error (message explains what to fix), 2 = a validation check failed.
 Set `MATRIX2PTU_DEBUG=1` to see full Python tracebacks.
 
-Runtime/memory (this PC): Matrix.raw (90 MB) 2 s / 1.3 GB; Sequence.raw (600 MB) 20 s / 7 GB.
-Memory scales with file size (≈12× the .raw size); `--validate` adds about 1 GB and ~50 s for
-Sequence.raw. Planned reductions: [docs/BACKLOG.md](docs/BACKLOG.md).
+Runtime / peak memory (this PC): Matrix.raw (90 MB) 2 s / 0.6 GB; Sequence.raw (600 MB)
+25 s / 2.9 GB. Conversion memory is about 5× the .raw size. `--validate` needs much more:
+7.2 GB and ~70 s in total for Sequence.raw, because the independent readers load the
+whole PTU. See [docs/BACKLOG.md](docs/BACKLOG.md).
 
 ## 3. Configuration
 
@@ -168,8 +169,9 @@ tools/           figures, FLOPA headless check
 tests/           unit tests (synthetic) + integration test on Matrix.raw
 ```
 
-`converter.DecodedAcquisition` holds, per photon: detector element, absolute
-time, laser-pulse index, micro time, line pass and sequence — the natural
+`converter.DecodedAcquisition` holds, per photon (sorted by laser pulse): detector
+element, laser-pulse index, micro time and line pass (sequence via `seq_of_pass`);
+with `keep_validation_data=True` also the absolute time and the phase — the natural
 starting point for pixel reassignment (which needs the element geometry; see
 REPORT §9).
 
