@@ -279,3 +279,196 @@ def test_iter_ptu_records_blockwise(tmp_path):
             assert np.array_equal(t[ev], f["time"][ev].astype(np.int64))
             for name in ("dtime", "channel", "marker"):
                 assert np.array_equal(d[name], f[name])
+
+
+# --------------------------------------------------------------------------- #
+# Streamed .obf input (event words inside an OBF container)
+def _write_obf(path, stacks, file_version=2):
+    """Minimal OBF writer for tests: stacks = [(name, array, footer_bytes, compression)]."""
+    import struct
+    import zlib
+    from matrix2ptu.obf import FILE_MAGIC, STACK_MAGIC
+    codes = {np.dtype(np.uint32): 0x10, np.dtype(np.int16): 0x08}
+    out = bytearray(FILE_MAGIC + struct.pack("<IQ", file_version, 0) + b"\0" * 8)
+    struct.pack_into("<Q", out, 14, len(out))
+    for i, (name, arr, footer, comp) in enumerate(stacks):
+        pos = len(out)
+        data = arr.tobytes()
+        if comp:
+            data = zlib.compress(data)
+        res = list(reversed(arr.shape)) + [1] * (15 - arr.ndim)
+        h = STACK_MAGIC + struct.pack("<II", 1, arr.ndim) + struct.pack("<15I", *res)
+        h += struct.pack("<15d", *([0.0] * 15)) + struct.pack("<15d", *([0.0] * 15))
+        nb = name.encode()
+        h += struct.pack("<5I", codes[arr.dtype], comp, 0, len(nb), 0)
+        nxt_field = len(out) + len(h) + 16          # position of the 'next' field
+        h += struct.pack("<QQQ", 0, len(data), 0) + nb
+        out += h + data + footer
+        if i + 1 < len(stacks):
+            struct.pack_into("<Q", out, nxt_field, len(out))
+    open(path, "wb").write(bytes(out))
+
+
+def test_obf_stream_decodes_like_raw(tmp_path, monkeypatch):
+    raw, _, _ = _synthetic_stream(tmp_path)
+    words = np.fromfile(raw, dtype="<u4")           # including the zero padding
+    obf = tmp_path / "syn.obf"
+    _write_obf(obf, [("00000", words, b"<root><doc/></root>", 0)])
+    from matrix2ptu.obf import find_event_stream
+    es = find_event_stream(str(obf))
+    assert es.n_words == words.size and es.stack_name == "00000"
+    for block in (None, 97):
+        if block:
+            monkeypatch.setattr(rawstream, "BLOCK_WORDS", block)
+        a, b = rawstream.decode(raw), rawstream.decode(str(obf))
+        assert a.n_words == b.n_words and a.n_padding_words == b.n_padding_words == 7
+        for f in ("ph_element", "ph_code", "ph_coarse", "sy_code", "sy_coarse",
+                  "mk_bits", "mk_coarse", "mk_word"):
+            assert np.array_equal(getattr(a, f), getattr(b, f)), f
+
+
+def test_obf_without_event_stream_is_refused(tmp_path):
+    from matrix2ptu.obf import find_event_stream
+    img = tmp_path / "img.obf"
+    _write_obf(img, [("STAR ORANGE multichannel", np.zeros((23, 5, 4), np.int16), b"", 1)])
+    with pytest.raises(ValueError, match="no 1-D uint32 event-stream stack"):
+        find_event_stream(str(img))
+    comp = tmp_path / "comp.obf"
+    _write_obf(comp, [("00000", np.arange(10, dtype=np.uint32), b"", 1)])
+    with pytest.raises(ValueError, match="compressed"):
+        find_event_stream(str(comp))
+
+
+def test_tdc_gap_fill():
+    tab = np.full(1024, np.nan)
+    tab[10], tab[12], tab[300] = 0.1, 0.2, 0.3
+    cal = tdc.TdcCalibration({0: tab.copy(), 23: tab.copy()}, "test")
+    el = np.array([0, 0, 0, 0], np.uint8)
+    code = np.array([10, 11, 11, 12], np.uint16)
+    filled = cal.fill_gaps(el, code)
+    assert filled == {0: 2}
+    assert cal.tables[0][11] == pytest.approx(0.15)
+    assert np.isnan(cal.tables[0][13])             # unused codes stay undefined
+
+
+def test_config_needs_exactly_one_stream(tmp_path):
+    from matrix2ptu.config import load_config
+    for inp, ok in (({"raw": "a.raw"}, True), ({"obf": "a.obf"}, True),
+                    ({"raw": "a.raw", "obf": "a.obf"}, False), ({"msr": "a.msr"}, False)):
+        p = tmp_path / "c.yaml"
+        p.write_text("input:\n" + "".join(f"  {k}: {v}\n" for k, v in inp.items()))
+        if ok:
+            load_config(str(p))
+        else:
+            with pytest.raises(ValueError, match="exactly one"):
+                load_config(str(p))
+
+
+@pytest.mark.skipif(not os.path.exists(os.path.join(ROOT, "inputs2", "MatrixOBF.obf")),
+                    reason="input data not available")
+def test_matrix_obf_integration(tmp_path):
+    """End-to-end on the real streamed MatrixOBF.obf (metadata from the .obf itself,
+    cross-checked against MatrixOBF.msr, which is also the validation reference)."""
+    import yaml
+    from matrix2ptu.converter import convert
+    from matrix2ptu.validate import validate
+    cfg = yaml.safe_load(open(os.path.join(ROOT, "configs", "matrix_obf.yaml")))
+    for k in ("obf", "msr"):
+        cfg["input"][k] = os.path.join(ROOT, cfg["input"][k])
+    cfg["timing"]["tdc_calibration_file"] = os.path.join(ROOT, cfg["timing"]["tdc_calibration_file"])
+    cfg["output"]["directory"] = str(tmp_path)
+    cp = tmp_path / "cfg.yaml"
+    yaml.safe_dump(cfg, open(cp, "w"))
+    res = convert(str(cp), keep_validation_data=True)
+    assert res["report"]["source"]["container"] == "obf"
+    assert res["report"]["parameters"]["msr_vs_obf_parameters"]["value"] == "agree"
+    out = validate(res, run_flopa=True)
+    failed = [c for c in out["checks"] if c["passed"] is False]
+    assert not failed, failed
+
+
+# --------------------------------------------------------------------------- #
+# pixel reassignment
+def test_xcorr_shift_recovers_known_shift():
+    from matrix2ptu import beadcal
+    rng = np.random.default_rng(3)
+    yy, xx = np.indices((128, 128))
+    img = np.zeros((128, 128))
+    for _ in range(25):                       # sparse field of Gaussian spots
+        y0, x0 = rng.uniform(10, 118, 2)
+        img += 100 * np.exp(-((yy - y0) ** 2 + (xx - x0) ** 2) / (2 * 3.0 ** 2))
+    moved = beadcal.fourier_shift(img, 2.3, -1.7)
+    sx, sy = beadcal.xcorr_shift(moved, img)
+    assert abs(sx - 2.3) < 0.05 and abs(sy + 1.7) < 0.05
+
+
+def test_gauss_fit_with_neighbour():
+    from matrix2ptu import beadcal
+    rng = np.random.default_rng(4)
+    yy, xx = np.indices((25, 25), dtype=float)
+    g = lambda y0, x0, a: a * np.exp(-((yy - y0) ** 2 + (xx - x0) ** 2) / (2 * 4.0 ** 2))
+    img = rng.poisson(g(12.3, 11.6, 400) + g(12.0, 24.0, 400) + 2.0)
+    p, err, ok = beadcal.fit_gauss(img, 12, 12, 4.0, neighbours=[(12.0, 24.0)])
+    assert ok and abs(p[1] - 12.3) < 4 * err[1] + 0.05 and abs(p[2] - 11.6) < 4 * err[2] + 0.05
+    p0, _, _ = beadcal.fit_gauss(img, 12, 12, 4.0)        # neighbour ignored -> pulled towards it
+    assert p0[2] - 11.6 > p[2] - 11.6 + 0.2
+
+
+def _split_ptu(path, photons, n_lines=4, acc=1, nx=10, dwell=10, mode="detector_resolved",
+               seqs="0:CONF:x1"):
+    """Minimal per-sequence PTU as the converter writes it: line windows of
+    nx * dwell syncs; photons = [(element, line pass, x position in px, dtime)]."""
+    from matrix2ptu.ptu_writer import write_ptu_t3
+    ls = 1000 + np.arange(n_lines * acc) * 3 * nx * dwell
+    le = ls + nx * dwell
+    ev = [(0, 4, 0, 1)] + [(int(a), 1, 0, 1) for a in ls] + [(int(b), 2, 0, 1) for b in le]
+    for e, k, x, d in photons:
+        ev.append((int(ls[k] + x * dwell), e, d, 0))
+    ev.sort(key=lambda r: (r[0], -r[3]))
+    n, c, d, s = (np.array(v) for v in zip(*ev))
+    tags = [("File_GUID", "{00000000-0000-0000-0000-000000000000}"), ("File_Comment", "test"),
+            ("Measurement_Mode", 3), ("Measurement_SubMode", 3),
+            ("MeasDesc_GlobalResolution", 25e-9), ("MeasDesc_Resolution", 5e-12),
+            ("TTResult_SyncRate", 40_000_000), ("TTResult_NumberOfRecords", 0),
+            ("TTResultFormat_TTTRRecType", 0x01010304), ("TTResultFormat_BitsPerRecord", 32),
+            ("TTResultFormat_WrapAround", 1024),
+            ("ImgHdr_PixX", nx), ("ImgHdr_PixY", n_lines * acc), ("ImgHdr_PixResol", 0.02),
+            ("ImgHdr_LineStart", 1), ("ImgHdr_LineStop", 2), ("ImgHdr_Frame", 3), ("ImgHdr_Dimensions", 3),
+            ("UsrMX_OutputMode", mode), ("UsrMX_Sequences", seqs)]
+    write_ptu_t3(str(path), tags, n.astype(np.int64), c.astype(np.uint8), d.astype(np.uint16),
+                 s.astype(np.uint8))
+
+
+def test_reassign_ptu_moves_photons_keeps_timing(tmp_path):
+    pytest.importorskip("ptufile")
+    from matrix2ptu import ism
+    from matrix2ptu.reassign import load_photons
+    src = tmp_path / "src.ptu"
+    # element 0 at (x 5.3, line 2), element 1 at (x 1.5, line 0), element 2 at (x 7.2, line 3)
+    _split_ptu(src, [(0, 2, 5.3, 111), (1, 0, 1.5, 222), (2, 3, 7.2, 333)])
+    shifts_px = np.zeros((23, 2))
+    shifts_px[0] = (2.0, 1.2)       # -> x 3.3, line 2 - 1 = 1
+    shifts_px[1] = (2.0, 0.0)       # -> x -0.5: leaves the field, dropped
+    shifts_px[2] = (-1.5, -0.4)     # -> x 8.7, line 3 - 0 = 3
+    cal = {"sequences": {"CONF": {"shift_nm": (shifts_px * 20).tolist()}}}
+    rep = ism.reassign_ptu(str(src), cal, "CONF", str(tmp_path / "det.ptu"), str(tmp_path / "pool.ptu"))
+    assert rep["stats"]["photons_dropped_out_of_field"] == 1
+    out = load_photons(str(tmp_path / "det.ptu"), 1, 10, 4, 20)
+    got = sorted((int(c), int(np.floor(x)), int(y), int(d)) for c, x, y, d in zip(out.ch, out.x, out.y, out.dtime))
+    assert got == [(0, 3, 1, 111), (2, 8, 3, 333)]
+    for c in ism.verify_reassigned(rep, run_tttrkit=False):
+        assert c["structure"]["time_monotonic"] and c["structure"]["markers_same_as_source"]
+        assert c["micro_time_multiset_per_channel_identical"] and c["image_vs_new_macro_times"]["identical"]
+    pooled = load_photons(str(tmp_path / "pool.ptu"), 1, 10, 4, 20)
+    assert set(pooled.ch.tolist()) == {0} and sorted(pooled.dtime.tolist()) == [111, 333]
+
+
+def test_reassign_refuses_pooled_or_multi_sequence(tmp_path):
+    pytest.importorskip("ptufile")
+    from matrix2ptu import ism
+    _split_ptu(tmp_path / "p.ptu", [(0, 0, 1, 1)], mode="pooled")
+    with pytest.raises(ValueError, match="detector-resolved"):
+        ism.scan_info(str(tmp_path / "p.ptu"))
+    _split_ptu(tmp_path / "m.ptu", [(0, 0, 1, 1)], seqs="0:CONF:x1;1:STED:x3")
+    with pytest.raises(ValueError, match="one PTU per sequence"):
+        ism.scan_info(str(tmp_path / "m.ptu"))

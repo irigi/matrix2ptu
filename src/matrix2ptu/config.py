@@ -25,7 +25,11 @@ import yaml
 AUTO = "auto"
 
 DEFAULTS = {
-    "input": {"raw": None, "msr": None},
+    # exactly one of raw / obf: the photon event stream of the acquisition
+    #   raw: headerless .raw stream file (Matrix1 streaming format 4)
+    #   obf: streamed .obf container (Matrix1 streaming format 0); its embedded
+    #        Imspector parameters are used as metadata, so msr is optional
+    "input": {"raw": None, "obf": None, "msr": None},
     "output": {
         "directory": "outputs",
         "basename": None,
@@ -90,9 +94,16 @@ def load_config(path: str) -> dict:
     with open(path) as f:
         user = yaml.safe_load(f) or {}
     cfg = _merge(DEFAULTS, user)
-    if not cfg["input"]["raw"]:
-        raise ValueError("input.raw must be given")
+    given = [k for k in ("raw", "obf") if cfg["input"][k]]
+    if len(given) != 1:
+        raise ValueError("give exactly one of input.raw (a .raw stream) or input.obf "
+                         "(a streamed .obf acquisition)")
     return cfg
+
+
+def source_path(cfg: dict) -> str:
+    """Path of the event-stream file (input.raw or input.obf)."""
+    return cfg["input"]["raw"] or cfg["input"]["obf"]
 
 
 @dataclass
@@ -122,6 +133,7 @@ def resolve(cfg: dict, meta: dict | None) -> Resolved:
     (they need the decoded data) in converter.check_against_raw()."""
     r = Resolved()
     sc, acq, tm, det = cfg["scan"], cfg["acquisition"], cfg["timing"], cfg["detector"]
+    MS = (meta or {}).get("metadata_label", ".msr metadata")   # provenance label
 
     def pick(key, user_val, meta_val, unit_note="", rel=1e-3):
         if user_val != AUTO and user_val is not None:
@@ -130,10 +142,10 @@ def resolve(cfg: dict, meta: dict | None) -> Resolved:
                 ok = (_close(float(user_val), float(meta_val), rel)
                       if isinstance(meta_val, (int, float)) else user_val == meta_val)
                 if not ok:
-                    r.warn(f"{key}: config value {user_val}{unit_note} differs from .msr "
-                           f"metadata {meta_val}{unit_note}; using the config value")
+                    r.warn(f"{key}: config value {user_val}{unit_note} differs from "
+                           f"{MS} {meta_val}{unit_note}; using the config value")
         elif meta_val is not None:
-            r.set(key, meta_val, ".msr metadata")
+            r.set(key, meta_val, MS)
         else:
             raise ValueError(f"{key} is 'auto' but no .msr metadata is available; "
                              f"set scan/timing parameter '{key}' in the config file")
@@ -181,7 +193,7 @@ def resolve(cfg: dict, meta: dict | None) -> Resolved:
         if msr_seq is None:
             raise ValueError("acquisition.sequences is 'auto' but cannot be derived from the "
                              ".msr file; list the sequences with their line_accumulation")
-        r.set("sequences", msr_seq, ".msr metadata")
+        r.set("sequences", msr_seq, MS)
     else:
         seqs = [{"name": str(s.get("name", f"seq{i}")),
                  "line_accumulation": int(s["line_accumulation"])}
@@ -217,7 +229,7 @@ def resolve(cfg: dict, meta: dict | None) -> Resolved:
             if not m.get("element_delays_s"):
                 raise ValueError("element_delays_ps is 'auto' but no .msr metadata; give 23 "
                                  "values in ps, or set apply_element_delays: false")
-            r.set("element_delays_ps", [d * 1e12 for d in m["element_delays_s"]], ".msr metadata")
+            r.set("element_delays_ps", [d * 1e12 for d in m["element_delays_s"]], MS)
         else:
             r.set("element_delays_ps", [float(v) for v in ed], "config")
         if len(r["element_delays_ps"]) != r["n_elements"]:
@@ -227,7 +239,7 @@ def resolve(cfg: dict, meta: dict | None) -> Resolved:
         if cd in (AUTO, None):
             if "common_delay_s" not in m:
                 raise ValueError("common_delay_ps is 'auto' but no .msr metadata")
-            r.set("common_delay_ps", m["common_delay_s"] * 1e12, ".msr metadata")
+            r.set("common_delay_ps", m["common_delay_s"] * 1e12, MS)
         else:
             r.set("common_delay_ps", float(cd), "config")
     else:
@@ -238,11 +250,11 @@ def resolve(cfg: dict, meta: dict | None) -> Resolved:
 
     # laser frequency: resolved later against the raw stream; keep user value
     r.set("laser_frequency_hz", tm["laser_frequency_hz"], "config" if tm["laser_frequency_hz"] != AUTO else "pending")
-    r.set("line_frequency_hz_msr", m.get("line_frequency_hz"), ".msr metadata" if m else "n/a")
+    r.set("line_frequency_hz_msr", m.get("line_frequency_hz"), MS if m else "n/a")
 
     # geometry for header
-    r.set("x0_um", (m["offset_x_m"] - m["fov_x_m"] / 2) * 1e6 if m else 0.0, ".msr metadata" if m else "default")
-    r.set("y0_um", (m["offset_y_m"] - m["fov_y_m"] / 2) * 1e6 if m else 0.0, ".msr metadata" if m else "default")
+    r.set("x0_um", (m["offset_x_m"] - m["fov_x_m"] / 2) * 1e6 if m else 0.0, MS if m else "default")
+    r.set("y0_um", (m["offset_y_m"] - m["fov_y_m"] / 2) * 1e6 if m else 0.0, MS if m else "default")
     if m.get("crosstalk_filter_active"):
         r.warn("Imspector crosstalk filter was active; the raw stream is unfiltered")
     for c in (m.get("channels") or []):

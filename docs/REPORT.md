@@ -187,8 +187,12 @@ it cannot replace the `.raw`. It **is** valuable as a metadata source. It suppli
 * scan offsets (written to ImgHdr_X0/Y0).
 
 Its histogram cubes are also an excellent validation reference. A metadata reader
-(`obf.py`, `msr_meta.py`) was implemented; no `.obf` → PTU converter was implemented.
-Saving the `.msr` alongside every `.raw` is recommended.
+(`obf.py`, `msr_meta.py`) was implemented. Saving the `.msr` alongside every `.raw` is recommended.
+
+*Update 2026-10-21:* a **streamed** `.obf` (Matrix1 streaming format "OBF") is a different
+kind of OBF file. It contains the same event words as a `.raw` and is converted by the
+same pipeline; see [OBF_REPORT.md](OBF_REPORT.md). The statement above holds for `.msr`
+and image `.obf` files.
 
 ---
 

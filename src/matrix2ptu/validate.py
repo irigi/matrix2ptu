@@ -20,7 +20,8 @@ Checks (all results go into a JSON report and are printed):
   I2  image from PTU via tttrkit/FLOPA ImageReconstructor vs. I1
   I3  image vs. Imspector cube(s) from the .msr (pixel-wise)
   I4  image vs. Intensity.tif (correlation; the TIFF is a colour rendering)
-  D1  decay histogram (100 ps bins) vs. Imspector cube histogram
+  D1  decay histogram (100 ps bins) of the image photons (inside the line
+      windows) vs. Imspector cube histogram
   D2  per-element alignment after delay correction
 """
 from __future__ import annotations
@@ -346,7 +347,9 @@ def validate(result: dict, tif_path: str | None = None, run_flopa: bool = True) 
         res_ps = res * 1e12
         img_ptu = np.zeros((nseq, r["pixels_y"], r["pixels_x"]), np.int64)
         dec = {}                                       # D1: sequence -> 100 ps histogram
-        nb = int(np.ceil(Tg / res - 1e-6))
+        n_in = np.zeros(nseq, np.int64)                # photons inside / outside the line
+        n_out = np.zeros(nseq, np.int64)               # windows (outside = flyback etc.)
+        nb = int(np.ceil(Tg / res - 1e-3))     # same rule as the converter
         L = max(nb, dmax + 1)
         n_chan = ch_counts.size
         h2 = np.zeros(n_chan * L, np.int64)            # D2: channel x dtime
@@ -359,8 +362,13 @@ def validate(result: dict, tif_path: str | None = None, run_flopa: bool = True) 
                 k = np.searchsorted(ls, tp, side="right") - 1
                 kk = np.clip(k, 0, None)
                 sq = seq_pattern[np.minimum(kk, seq_pattern.size - 1)]
+                inside = (k >= 0) & (tp < le[kk])
+                for i in range(nseq):
+                    n_in[i] += int((inside & (sq == i)).sum())
+                    n_out[i] += int(((k >= 0) & ~inside & (sq == i)).sum())
                 for i in range(min(nseq, len(names))):
-                    sel = (k >= 0) & (sq == i)
+                    # the image photons only: Imspector's cube holds no flyback photons
+                    sel = inside & (sq == i)
                     hb = np.bincount((dt_ph[sel] * res_ps // 100).astype(np.int64))
                     prev = dec.get(i, np.zeros(0, np.int64))
                     if hb.size > prev.size:
@@ -372,6 +380,13 @@ def validate(result: dict, tif_path: str | None = None, run_flopa: bool = True) 
             if f["mode"] == "detector_resolved" and n_chan:
                 h2 += np.bincount(d["channel"][is_ph].astype(np.int64) * L + dt_ph, minlength=h2.size)
 
+        for i in range(nseq):
+            tot = n_in[i] + n_out[i]
+            if tot:
+                out["notes"].append(
+                    f"sequence {i}: {int(n_out[i])} photons ({n_out[i]/tot*100:.2f}%) after the "
+                    "first line start but outside the line windows (flyback); kept in the PTU, "
+                    "not part of the image, excluded from D1")
         # ---- I1 own reconstruction from PTU vs raw
         same_p = np.array_equal(img_ptu, raw_img_p)
         d = np.abs(img_ptu - raw_img).sum()
@@ -421,7 +436,7 @@ def validate(result: dict, tif_path: str | None = None, run_flopa: bool = True) 
             check(f"I3 image vs .msr '{names[i]}'", passed,
                   f"PTU {int(img_ptu[i].sum())} vs Imspector {int(R.sum())} counts; identical pixels "
                   f"{ident*100:.2f}%; sum|diff| {dsum} ({dsum/max(R.sum(),1)*100:.3f}%); r = {c:.4f}" + hint)
-            # ---- D1 decay (photons of this sequence, after the first line start)
+            # ---- D1 decay (image photons of this sequence, inside the line windows)
             fb = int(round(ref.shape[-1]))
             h = np.zeros(fb, np.int64)
             hb = dec.get(i, np.zeros(0, np.int64))[:fb]

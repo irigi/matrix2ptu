@@ -138,3 +138,26 @@ photon for the absolute time and phase. For Matrix it is tttrkit's reconstructio
     (saves 11 bytes per photon);
   * write the PTU without the global pulse sort, using a bounded reorder buffer.
   Only needed for acquisitions with many hundreds of millions of photons.
+
+### Proposed 2026-10-21 (from the `.obf` work; not agreed yet)
+
+* **E. Optional removal of flyback photons.** In the 561 nm STED dataset 14 % of the
+  photons arrive during the scanner flyback, apparently with STED blanked (confocal-like
+  decay; OBF_REPORT §6.3). Image readers ignore them. Software that histograms a whole
+  file would not. Option idea: `output.drop_outside_line_windows: false` (default keeps all
+  events), reported in the header and conversion report.
+* **F. Pixel reassignment:** *done 2026-10-22 with a bead calibration* (ISM_REPORT.md):
+  `ism-calibrate` / `ism-reassign`, event-level reassigned PTUs.
+
+### Proposed 2026-10-22 (from the reassignment work; not agreed yet)
+
+* **G. Calibration at the target's scan position.** Beads (12 µm off-centre) and Dense
+  (centred) gave different confocal shift scales (1.0 vs 1.4). A bead series at scan
+  offsets 0 / ±10 µm would show whether the scan position matters.
+* **H. Detector crosstalk.** About 1.2 % of photons are neighbour-element crosstalk
+  (crosstalk filter off). Measure per element pair and/or acquire with the filter on.
+* **I. Frequency-dependent reassignment / multi-image deconvolution.** STED shifts depend
+  on spatial frequency (core vs halo), and so, probably, do the confocal shifts at fine
+  scales. A Fourier-reweighted method could use this; simple pixel reassignment cannot.
+* **J. Gated STED reassignment.** Shifts per micro-time window (the STED PSF narrows with
+  time after the pulse).

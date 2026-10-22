@@ -1,0 +1,50 @@
+# Dataset A (640 nm, NA 1.42), RAW acquisition (separate acquisition of the same area
+# as MatrixOBF.obf): 125 x 125, 40 nm, 100 us. Metadata from MatrixRAW.msr.
+# Explicit values below are the user's experimental parameters (primary
+# reference); they are cross-checked against the metadata and the stream.
+
+input:
+  raw: inputs2/MatrixRAW.raw
+  msr: inputs2/MatrixRAW.msr
+
+output:
+  directory: outputs/MatrixRAW
+  modes: [detector_resolved, pooled]
+  split_sequences: false
+  overwrite: true
+  hw_type: "Abberior MATRIX (SPAD23) converted"   # for SymPhoTime tests try "MultiHarp 150 4P"
+
+scan:
+  pixels_x: 125
+  pixels_y: 125
+  pixel_size_um: 0.04
+  pixel_dwell_us: 100             # per single line pass (NOT multiplied by accumulation)
+  dwell_convention: per_line_pass
+  bidirectional: false
+  scan_type: linear
+  frames: 1
+  line_start_offset_us: 0.0
+
+acquisition:
+  mode: line_interleaved          # order = order of acquisition within each y-line
+  sequences:
+    - name: STAR_RED_CONF
+      line_accumulation: 1
+
+detector:
+  n_elements: 23
+  sync_element: 23
+  sync_divider: 32
+
+timing:
+  laser_frequency_hz: auto
+  microtime_resolution_ps: 5
+  apply_element_delays: true
+  element_delays_ps: auto
+  common_delay_ps: auto
+  sync_smoothing_window: 64
+  # This dataset is too dim for a per-element self-calibration of the TDCs
+  # (edge elements have ~900-1500 photons). Use the table measured on the bright
+  # orangebeads acquisition of the same session and detector: tables of two
+  # separate acquisitions agree to 2-4 ps for bright elements (docs/OBF_REPORT.md).
+  tdc_calibration_file: configs/calibration/MATRIX1_tdc_2026-10-21_orangebeadsOBF.npz

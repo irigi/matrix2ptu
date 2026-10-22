@@ -22,8 +22,8 @@ import time
 import numpy as np
 
 from . import __version__, rawstream, tdc, timing
-from .config import AUTO, Resolved, load_config, resolve
-from .msr_meta import read_msr_metadata
+from .config import AUTO, Resolved, load_config, resolve, source_path
+from .msr_meta import compare_metadata, read_msr_metadata
 from .ptu_writer import REC_TYPE_HYDRAHARP2_T3, WRAP, new_guid, write_ptu_t3
 
 MARK_LINE_START = 1   # marker bit values (ImgHdr_LineStart = 1 -> bit value 1)
@@ -43,7 +43,7 @@ def log(msg):
 # Decoding and timing (shared by conversion and validation)
 # --------------------------------------------------------------------------- #
 class DecodedAcquisition:
-    """All per-event quantities derived from one .raw file.
+    """All per-event quantities derived from one event stream (.raw or streamed .obf).
 
     Per photon (sorted by laser pulse; photons with the same pulse keep their
     order in the stream): `pulse` (int64, PTU nsync), `dtime` (uint16),
@@ -58,7 +58,7 @@ class DecodedAcquisition:
     def __init__(self, cfg: dict, r: Resolved, meta: dict | None,
                  keep_validation_data: bool = False):
         self.r = r
-        raw = cfg["input"]["raw"]
+        raw = source_path(cfg)
         t0 = time.time()
         log(f"decoding {raw}")
         ev = rawstream.decode(raw, sync_element=r["sync_element"], keep_sync=False)
@@ -85,6 +85,12 @@ class DecodedAcquisition:
         # --- TDC calibration -----------------------------------------------------
         if r["tdc_calibration_file"]:
             cal = tdc.TdcCalibration.load(r["tdc_calibration_file"])
+            filled = cal.fill_gaps(el, code)
+            if filled:
+                r.warn(f"loaded TDC table has no value for some codes used in this file; "
+                       f"interpolated between neighbouring codes for {sum(filled.values())} photons "
+                       f"(per element: {filled})")
+            r.set("tdc_gap_filled_photons", filled, "loaded TDC table vs this file")
         else:
             cal = tdc.TdcCalibration.from_histograms(el, code, ev.sync.code_hist, r["sync_element"])
         self.cal = cal
@@ -113,7 +119,8 @@ class DecodedAcquisition:
 
         # --- photons: absolute time incl. delay corrections, block-wise -----------
         res = r["microtime_resolution_ps"] * 1e-12
-        self.n_bins = int(np.ceil(self.Tp / res - 1e-6))
+        # a remainder below 1/1000 bin (ppb-level frequency noise) gives no extra bin
+        self.n_bins = int(np.ceil(self.Tp / res - 1e-3))
         if self.n_bins > 32768:
             raise ConversionError(f"microtime resolution {res*1e12} ps gives {self.n_bins} bins per "
                                   "laser period; the T3 record allows 32768. Use a coarser resolution.")
@@ -226,8 +233,9 @@ class DecodedAcquisition:
             nominal = meta.get("sync_frequency_hz")
             ext = meta.get("ext_frequencies_hz") or []
             inp = meta.get("sync_source_input")
-            r.set("msr_sync_source_input", inp, ".msr metadata")
-            r.set("msr_ext_frequencies_hz", ext, ".msr metadata")
+            ms = meta.get("metadata_label", ".msr metadata")
+            r.set("msr_sync_source_input", inp, ms)
+            r.set("msr_ext_frequencies_hz", ext, ms)
             if inp not in (None, "-1") and ext:
                 # external sync: Imspector's measured frequency of that input
                 try:
@@ -394,15 +402,37 @@ def convert(config_path: str, only_validate_inputs: bool = False,
     """Run the conversion.  keep_validation_data=True keeps the per-photon
     arrays that validate.validate() needs (16 bytes/photon more memory)."""
     cfg = load_config(config_path)
-    raw = cfg["input"]["raw"]
+    raw = source_path(cfg)
+    kind = "obf" if cfg["input"]["obf"] else "raw"
     if not os.path.exists(raw):
-        raise ConversionError(f"raw file not found: {raw}")
+        raise ConversionError(f"{kind} file not found: {raw}")
+    source_info = {"path": raw, "container": kind}
     meta = None
+    meta_diffs = []
+    if kind == "obf":
+        # a streamed .obf carries the event words AND the Imspector parameters of
+        # the acquisition; those are the primary metadata (an .msr is optional)
+        from .obf import find_event_stream
+        es = find_event_stream(raw)         # clear error if this is an image-only OBF
+        meta = read_msr_metadata(raw)
+        meta["metadata_label"] = "embedded .obf parameters"
+        source_info.update({"obf_stack": es.stack_name, "obf_byte_offset": es.byte_offset,
+                            "obf_stack_words": es.n_words,
+                            "matrix_streaming_format": meta.get("streaming_format")})
     if cfg["input"]["msr"]:
         if not os.path.exists(cfg["input"]["msr"]):
             raise ConversionError(f"msr file not found: {cfg['input']['msr']}")
-        meta = read_msr_metadata(cfg["input"]["msr"])
+        msr_meta = read_msr_metadata(cfg["input"]["msr"])
+        if meta is None:
+            meta = msr_meta
+        else:
+            meta_diffs = compare_metadata(meta, msr_meta)
     r = resolve(cfg, meta)
+    for d in meta_diffs:
+        r.warn(f"embedded .obf parameters and .msr disagree: {d}  (the .msr may belong to "
+               "another acquisition; the .obf values are used)")
+    if kind == "obf" and cfg["input"]["msr"] and not meta_diffs:
+        r.set("msr_vs_obf_parameters", "agree", "cross-check")
     acq = DecodedAcquisition(cfg, r, meta, keep_validation_data)
 
     out_dir = cfg["output"]["directory"]
@@ -440,6 +470,11 @@ def convert(config_path: str, only_validate_inputs: bool = False,
                            f"line start + {r['pixels_x']} x {r['pixel_dwell_us']} us.")
                 tags = _tags(acq, mode, 0, n_ch, pix_y, sdesc, raw, comment,
                              cfg["output"]["hw_type"])     # record count patched on write
+                if kind == "obf":
+                    tags.insert(tags.index(next(t for t in tags if t[0] == "UsrMX_OutputMode")),
+                                ("UsrMX_SourceFormat",
+                                 f"streamed OBF, event stack '{source_info['obf_stack']}' "
+                                 f"(Matrix1 streaming format {source_info['matrix_streaming_format']})"))
                 n_rec = write_ptu_t3(fname, tags, n, c, d, s)
                 n_ph = int(acq.pulse.size if phm is None else phm.sum())
                 if pooled:
@@ -465,6 +500,7 @@ def convert(config_path: str, only_validate_inputs: bool = False,
     report = {
         "matrix2ptu_version": __version__,
         "config_file": config_path,
+        "source": source_info,
         "raw_summary": acq.summary,
         "parameters": {k: {"value": _jsonable(v), "source": r.source.get(k)} for k, v in r.values.items()},
         "derived": {

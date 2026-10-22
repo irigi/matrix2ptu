@@ -1,5 +1,6 @@
 # Large/raw experimental data - not tracked
 inputs/
+inputs2/
 outputs/
 *.raw
 *.ptu
@@ -13,3 +14,4 @@ __pycache__/
 *.pyc
 .pytest_cache/
 *.egg-info/
+inputs3/

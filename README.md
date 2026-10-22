@@ -1,16 +1,28 @@
-# matrix2ptu — Abberior MATRIX `.raw` → PicoQuant `.ptu`
+# matrix2ptu — Abberior MATRIX `.raw` / streamed `.obf` → PicoQuant `.ptu`
 
 Converts the photon stream that Imspector writes for the Abberior **MATRIX**
 detector (a 23-element PI Imaging SPAD23 array with per-element TDCs) into
 **event-based PicoQuant PTU files** (one record per photon, with macro time,
 micro time and detector channel, plus scan markers).
 
+The stream can come from a headerless **`.raw`** file (Matrix1 streaming format
+"raw") or from a **streamed `.obf`** file (Matrix1 streaming format "OBF"),
+which holds the same event words plus the acquisition parameters. Image-type
+OBF files (`.msr`, Lightbox image `.obf`) contain no photon events and cannot be
+converted to event-based PTU. See [docs/OBF_REPORT.md](docs/OBF_REPORT.md).
+
 * **detector-resolved** PTU: channel = detector element 0…22
 * **pooled** PTU: all elements in channel 0 (pooled per photon, after per-element delay correction)
 * optional: one PTU per acquisition sequence (for software that cannot handle line-interleaved sequences)
 
-Read **[docs/REPORT.md](docs/REPORT.md)** for what was established about the
-format, how the conversion works, the validation results and the limitations.
+Reports:
+* **[docs/REPORT.md](docs/REPORT.md)**: the `.raw` stream format, how the conversion
+  works, validation and limitations;
+* **[docs/OBF_REPORT.md](docs/OBF_REPORT.md)**: the `.obf` files, the `.obf` → PTU
+  conversion, validation on the 640 nm and 561 nm (CONF + STED) datasets, and
+  RAW vs OBF;
+* **[docs/PIXEL_REASSIGNMENT.md](docs/PIXEL_REASSIGNMENT.md)**: what the available
+  geometry and shift information supports for future pixel reassignment.
 
 ---
 
@@ -21,20 +33,29 @@ format, how the conversion works, the validation results and the limitations.
    python3 -m venv .venv && source .venv/bin/activate
    pip install -e ".[validate,dev]"
    ```
-2. **Collect the input files** of one measurement: the `.raw` file (required)
-   and the `.msr` file of the same measurement (strongly recommended). The
-   `.raw` has no header: without the `.msr`, image size, dwell time, sequence
+2. **Collect the input files** of one measurement:
+   * the event stream (required): the `.raw` file **or** the streamed `.obf` file;
+   * the `.msr` file of the same measurement (strongly recommended).
+
+   The `.raw` has no header. Without the `.msr`, image size, dwell time, sequence
    structure, laser frequency and per-element delays must be written in the
-   config.
+   config. A streamed `.obf` carries these parameters itself; its `.msr` is then
+   used for cross-checks and as the validation reference.
 3. **Inspect the raw file** (optional, helps to fill in the config):
    ```bash
    matrix2ptu inspect inputs/Matrix.raw --msr inputs/Matrix.msr
+   matrix2ptu inspect inputs2/MatrixOBF.obf --msr inputs2/MatrixOBF.msr
    ```
 4. **Write a YAML config for this dataset.** Copy the closest example,
    [`configs/matrix.yaml`](configs/matrix.yaml) (one sequence) or
    [`configs/sequence.yaml`](configs/sequence.yaml) (line-interleaved
    sequences), and edit at least:
-   * `input.raw`, `input.msr` and `output.directory`
+   * `input.raw` **or** `input.obf`, then `input.msr` and `output.directory`
+     (examples for `.obf`: [`configs/matrix_obf.yaml`](configs/matrix_obf.yaml),
+     [`configs/orangebeads_obf.yaml`](configs/orangebeads_obf.yaml))
+   * for dim data (fewer than about 1000 photons in some element): set
+     `timing.tdc_calibration_file` to a table from a bright acquisition of the same
+     session (see OBF_REPORT §4.2)
    * `output.modes`, and `output.split_sequences: true` if you need one PTU per sequence (e.g. for SymPhoTime)
    * `scan.*`: image size, pixel size, dwell **per line pass**
    * `acquisition.sequences`: name and `line_accumulation` of each sequence, in acquisition order
@@ -85,7 +106,45 @@ matrix2ptu convert configs/sequence.yaml --validate
 
 # check settings without writing PTU files
 matrix2ptu convert configs/sequence.yaml --dry-run
+
+# streamed .obf acquisitions (dataset A 640 nm, dataset B 561 nm CONF + STED)
+matrix2ptu convert configs/matrix_obf.yaml      --validate
+matrix2ptu convert configs/orangebeads_obf.yaml --validate
 ```
+
+Additional checks (see OBF_REPORT §5–6):
+
+```bash
+# the .obf container route gives byte-identical PTU records to the same words as .raw
+.venv/bin/python tools/obf_container_check.py configs/matrix_obf.yaml
+# FLOPA's per-pixel counts, mean arrival times and phasors vs Imspector's cube
+.venv/bin/python tools/flopa_flim_check.py outputs/MatrixOBF/MatrixOBF_pooled.ptu inputs2/MatrixOBF.msr 125 125 1
+# compare two acquisitions of the same area (e.g. RAW vs OBF)
+.venv/bin/python tools/compare_pair.py outputs/MatrixRAW/MatrixRAW outputs/MatrixOBF/MatrixOBF
+# per-element image shifts / detector geometry (pixel-reassignment assessment)
+.venv/bin/python tools/analyze_array_geometry.py
+```
+
+Pixel reassignment (ISM) of streamed `.obf` data with a bead calibration
+(see [docs/ISM_REPORT.md](docs/ISM_REPORT.md)):
+
+```bash
+# convert with one PTU per sequence (output.split_sequences: true)
+matrix2ptu convert configs/beads_obf_split.yaml
+# per-element shifts from isolated beads, one table per sequence
+matrix2ptu ism-calibrate --seq CONF=<beads seq0 detector-resolved PTU> \
+    --seq STED=<beads seq1 detector-resolved PTU> --detect-in STED --metadata inputs3/Beads.obf \
+    --out my_calibration.json
+# apply to one sequence of a target (detector-resolved + pooled reassigned PTU, checks, report)
+matrix2ptu ism-reassign <target seq0 detector-resolved PTU> --calibration my_calibration.json \
+    --sequence CONF --out-dir outputs/reassigned --metadata inputs3/Dense.obf
+# the whole inputs3 round (conversion, calibration, transfer test, reassignment, validation, figures)
+.venv/bin/python tools/ism_inputs3.py all
+```
+
+Reassigned PTUs keep every photon's micro time and detector channel. The macro time
+of a moved photon encodes its new position, so it is not the detection time any
+more. Use the original PTUs for anything that needs photon detection times.
 
 (Without installing: `PYTHONPATH=src python -m matrix2ptu ...`.)
 
@@ -122,6 +181,8 @@ every parameter, and warns about disagreements.
 
 | key | meaning | can it be inferred? |
 |---|---|---|
+| `input.raw` / `input.obf` | the event stream: a `.raw` file or a streamed `.obf` (exactly one) | — |
+| `input.msr` | metadata and validation reference | optional for `.obf` (its own parameters are used) |
 | `scan.pixels_x`, `pixels_y` | image size | `.msr` (checked against the number of line markers) |
 | `scan.pixel_size_um` | pixel size (header only) | `.msr` |
 | `scan.pixel_dwell_us` | dwell **per line pass** | `.msr` (`pixel_steps/total`); checked against the line period |
@@ -134,11 +195,12 @@ every parameter, and warns about disagreements.
 | `timing.laser_frequency_hz` | laser repetition rate | measured: pulses per line × line frequency (`.msr`) — **needs the .msr or a user value** |
 | `timing.microtime_resolution_ps` | PTU micro-time bin (default 5 ps) | user choice |
 | `timing.element_delays_ps`, `common_delay_ps` | per-element timing offsets | `.msr` (Imspector calibration) — **needed for the pooled output** |
+| `timing.tdc_calibration_file` | re-use a TDC table (`*_tdc_calibration.npz`) | needed for dim data; the converter fills TDC codes the table lacks from neighbouring codes |
 | `output.modes` | `detector_resolved`, `pooled` | — |
 | `output.split_sequences` | also write one PTU per sequence | — |
 | `output.hw_type` | PTU `HW_Type` string | — |
 
-**Settings that cannot be inferred from the `.raw` alone** (the file has no
+**Settings that cannot be inferred from the `.raw` alone** (a streamed `.obf` contains them) (the file has no
 header): image size, dwell time, sequence/accumulation structure, laser
 frequency and per-element delays. Supply the `.msr` of the same measurement or
 write them in the config.
@@ -146,7 +208,11 @@ write them in the config.
 ## 4. Opening the PTU files
 
 **FLOPA** (napari-flopa): open the PTU, set *lines/pixels* and
-**line accumulations** — Matrix: `(1)`; Sequence: `(2, 5)` (CONF then STED).
+**line accumulations** — Matrix: `(1)`; Sequence: `(2, 5)` (CONF then STED);
+640 nm dataset: `(1)`; orangebeads dataset: `(1, 3)` (CONF then STED).
+Photons recorded during the scanner flyback stay in the PTU but are outside the
+line windows. Image readers ignore them; whole-file decay histograms would include
+them (OBF_REPORT §6.3).
 Markers: frame = 4, line start = 1, line stop = 2 (FLOPA defaults).
 The detector-resolved file gives a `channel` dimension of 23.
 
@@ -162,19 +228,25 @@ src/matrix2ptu/
   rawstream.py   decode 32-bit MATRIX words, unwrap coarse counter
   tdc.py         TDC code-density calibration
   timing.py      laser pulse train from the /32 sync; macro/micro time
-  msr_meta.py    read acquisition metadata from .msr/.obf  (obf.py = container reader)
+  msr_meta.py    read acquisition metadata from .msr/.obf  (obf.py = container reader,
+                 incl. locating the event stack of a streamed .obf)
   config.py      YAML settings, provenance, cross-checks
   converter.py   pipeline: DecodedAcquisition (all per-photon quantities) + PTU assembly
   ptu_writer.py  PTU header + HydraHarp-v2 T3 record encoder
   validate.py    checks with independent readers (ptufile, tttrkit)
-tools/           figures, FLOPA headless check
+  beadcal.py     bead detection, per-element Gaussian fits, shift calibration, validation
+  reassign.py    photon positions from a per-sequence PTU; event-level reassignment; PTU writing
+  ism.py         calibration / reassignment workflow, calibration files, checks
+tools/           figures, FLOPA headless and FLIM checks, RAW-vs-OBF comparison,
+                 OBF container control test, detector-geometry analysis,
+                 ism_inputs3.py + ism_figures.py (pixel-reassignment round)
 tests/           unit tests (synthetic) + integration test on Matrix.raw
 ```
 
 `converter.DecodedAcquisition` holds, per photon (sorted by laser pulse): detector
 element, laser-pulse index, micro time and line pass (sequence via `seq_of_pass`);
-with `keep_validation_data=True` also the absolute time and the phase — the natural
-starting point for pixel reassignment (which needs the element geometry; see
-REPORT §9).
+with `keep_validation_data=True` also the absolute time and the phase.
+Pixel reassignment works on the per-sequence detector-resolved PTUs instead
+(`reassign.load_photons`), so it can be applied to any converted file.
 
 Run tests: `pytest -q`.

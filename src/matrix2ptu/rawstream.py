@@ -34,14 +34,20 @@ BLOCK_WORDS = 2_000_000      # words processed at a time (bounds temporary memor
 
 
 class WordFile:
-    """The .raw file as a sequence of little-endian uint32 words, read block by
+    """The event words as a sequence of little-endian uint32, read block by
     block from disk (the whole file is never loaded).  Trailing zero padding is
-    excluded."""
+    excluded.
 
-    def __init__(self, path: str, block: int | None = None):
+    For a .raw file the words are the whole file.  For a streamed .obf the
+    words are the event-stream stack inside the container (byte_offset,
+    n_words; see obf.find_event_stream)."""
+
+    def __init__(self, path: str, block: int | None = None,
+                 byte_offset: int = 0, n_words: int | None = None):
         self.path = path
         self.block = block or BLOCK_WORDS
-        n_total = os.path.getsize(path) // 4
+        self.byte_offset = byte_offset
+        n_total = os.path.getsize(path) // 4 if n_words is None else n_words
         if n_total == 0:
             raise ValueError(f"{path}: file is empty")
         last = 0
@@ -58,7 +64,8 @@ class WordFile:
         self.blocks = [(s0, min(last, s0 + self.block)) for s0 in range(0, last, self.block)]
 
     def read(self, s0: int, s1: int) -> np.ndarray:
-        return np.fromfile(self.path, dtype="<u4", count=s1 - s0, offset=4 * s0)
+        return np.fromfile(self.path, dtype="<u4", count=s1 - s0,
+                           offset=self.byte_offset + 4 * s0)
 
 
 @dataclass
@@ -92,9 +99,24 @@ class RawEvents:
         return int(self.ph_element.size)
 
 
+def is_obf(path: str) -> bool:
+    with open(path, "rb") as f:
+        return f.read(10) == b"OMAS_BF\n\xff\xff"
+
+
+def open_words(path: str, block: int | None = None) -> WordFile:
+    """WordFile for a .raw file or for the event-stream stack of a streamed .obf
+    (recognised by its file signature, not by the extension)."""
+    if is_obf(path):
+        from .obf import find_event_stream
+        es = find_event_stream(path)
+        return WordFile(path, block, byte_offset=es.byte_offset, n_words=es.n_words)
+    return WordFile(path, block)
+
+
 def read_words(path: str) -> tuple[np.ndarray, int]:
     """Read the whole file as little-endian uint32 and strip trailing zero padding."""
-    wf = WordFile(path)
+    wf = open_words(path)
     return wf.read(0, wf.n_words), wf.n_padding
 
 
@@ -213,12 +235,13 @@ class SyncReader:
 
 def decode(path: str, sync_element: int = 23, keep_sync: bool = True,
            block: int | None = None) -> RawEvents:
-    """Decode a .raw file, reading it block by block (BLOCK_WORDS at a time).
+    """Decode a .raw file (or the event stream of a streamed .obf), reading it
+    block by block (BLOCK_WORDS at a time).
 
     keep_sync=False does not keep the sync records in memory (sy_coarse and
     sy_code are None); they stay available block-wise through `ev.sync`.
     """
-    wf = WordFile(path, block)
+    wf = open_words(path, block)
     blocks = wf.blocks
 
     # pass 1: unwrap state per block, record counts, sync code histogram

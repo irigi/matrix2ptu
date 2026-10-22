@@ -71,6 +71,18 @@ def table_from_histogram(hist: np.ndarray, reverse_taps: bool = True,
     return table
 
 
+def joint_histogram(ph_element, ph_code) -> np.ndarray:
+    """(element x code) histogram, built in blocks: no per-element copies of
+    the photon arrays."""
+    n_el = int(ph_element.max()) + 1 if ph_element.size else 0
+    hist = np.zeros(n_el * N_CODES, np.int64)
+    for s0 in range(0, ph_element.size, BLOCK):
+        key = ph_element[s0:s0 + BLOCK].astype(np.int64) * N_CODES
+        key += ph_code[s0:s0 + BLOCK]
+        hist += np.bincount(key, minlength=hist.size)
+    return hist.reshape(n_el, N_CODES)
+
+
 class TdcCalibration:
     """Per-channel code -> fraction-of-coarse-tick tables."""
 
@@ -88,21 +100,47 @@ class TdcCalibration:
     def from_histograms(cls, ph_element, ph_code, sync_hist, sync_element=23,
                         reverse_taps=True):
         """As from_events(), with the sync channel given as a code histogram."""
-        # one joint histogram (element x code), built in blocks: no per-element
-        # copies of the photon arrays
-        n_el = int(ph_element.max()) + 1 if ph_element.size else 0
-        hist = np.zeros(n_el * N_CODES, np.int64)
-        for s0 in range(0, ph_element.size, BLOCK):
-            key = ph_element[s0:s0 + BLOCK].astype(np.int64) * N_CODES
-            key += ph_code[s0:s0 + BLOCK]
-            hist += np.bincount(key, minlength=hist.size)
-        hist = hist.reshape(n_el, N_CODES)
+        hist = joint_histogram(ph_element, ph_code)
+        n_el = hist.shape[0]
         tables = {}
         for e in range(n_el):
             if hist[e].sum():
                 tables[e] = table_from_histogram(hist[e], reverse_taps, min_counts=1000)
         tables[sync_element] = table_from_histogram(sync_hist, reverse_taps)
         return cls(tables, "code-density (self-calibrated from this file)")
+
+    def fill_gaps(self, ph_element, ph_code) -> dict:
+        """For a table loaded from another acquisition: give a value to codes
+        that occur in this file but have no value in the table (they had zero
+        counts in the reference, i.e. ~zero width).  Such a code lies at the
+        boundary between its neighbours, so it gets the mean of the nearest
+        valid codes of the same quarter.  Returns {element: photons affected}."""
+        hist = joint_histogram(ph_element, ph_code)
+        affected = {}
+        for e in range(hist.shape[0]):
+            used = hist[e] > 0
+            if not used.any():
+                continue
+            if e not in self.tables:
+                raise ValueError(f"element {e} has photons but no TDC table in the loaded calibration")
+            tab = self.tables[e].copy()
+            gaps = np.flatnonzero(used & np.isnan(tab))
+            for c in gaps:
+                q0 = (c // TAPS) * TAPS
+                seg = tab[q0:q0 + TAPS]
+                valid = np.flatnonzero(~np.isnan(seg))
+                if valid.size == 0:
+                    raise ValueError(f"element {e}: TDC quarter {c // TAPS} has no calibrated codes")
+                i = c - q0
+                lo, hi = valid[valid < i], valid[valid > i]
+                nb = ([seg[lo[-1]]] if lo.size else []) + ([seg[hi[0]]] if hi.size else [])
+                tab[c] = float(np.mean(nb))
+            if gaps.size:
+                self.tables[e] = tab
+                affected[e] = int(hist[e][gaps].sum())
+        if affected:
+            self.method += f" + gap fill for {sum(affected.values())} photons"
+        return affected
 
     def fine_one(self, element: int, code: np.ndarray) -> np.ndarray:
         """Fine time for codes that all come from one element (no masks)."""

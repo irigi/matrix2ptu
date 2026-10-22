@@ -1,0 +1,49 @@
+# Dataset B (561 nm, NA 1.42), OBF acquisition: streamed .obf, 307 x 487, 30 nm, 50 us
+# per pass, 2 sequences line-interleaved: per y-line 1 x CONF then 3 x STED
+# (.msr line steps [1, 3]; 1948 line markers = 487 x 4).
+# Metadata 'auto' values come from the parameters embedded in the .obf.
+# Explicit values below are the user's experimental parameters (primary
+# reference); they are cross-checked against the metadata and the stream.
+
+input:
+  obf: inputs2/Sequence_orangebeadsOBF.obf
+  msr: inputs2/Sequence_orangebeadsOBF.msr
+
+output:
+  directory: outputs/OrangebeadsOBF
+  modes: [detector_resolved, pooled]
+  split_sequences: false          # true: one PTU per sequence instead (e.g. for SymPhoTime)
+  overwrite: true
+  hw_type: "Abberior MATRIX (SPAD23) converted"   # for SymPhoTime tests try "MultiHarp 150 4P"
+
+scan:
+  pixels_x: 307
+  pixels_y: 487
+  pixel_size_um: 0.03
+  pixel_dwell_us: 50             # per single line pass (NOT multiplied by accumulation)
+  dwell_convention: per_line_pass
+  bidirectional: false
+  scan_type: linear
+  frames: 1
+  line_start_offset_us: 0.0
+
+acquisition:
+  mode: line_interleaved          # order = order of acquisition within each y-line
+  sequences:
+    - name: STAR_ORANGE_CONF      # pass 1 of each y-line: EXC561 only
+      line_accumulation: 1
+    - name: STAR_ORANGE_STED      # passes 2-4: EXC561 + STED775 (Imspector gating on)
+      line_accumulation: 3
+
+detector:
+  n_elements: 23
+  sync_element: 23
+  sync_divider: 32
+
+timing:
+  laser_frequency_hz: auto
+  microtime_resolution_ps: 5
+  apply_element_delays: true
+  element_delays_ps: auto
+  common_delay_ps: auto
+  sync_smoothing_window: 64
