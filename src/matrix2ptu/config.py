@@ -91,7 +91,7 @@ def _merge(base, over):
 
 
 def load_config(path: str) -> dict:
-    with open(path) as f:
+    with open(path, encoding="utf-8") as f:
         user = yaml.safe_load(f) or {}
     cfg = _merge(DEFAULTS, user)
     given = [k for k in ("raw", "obf") if cfg["input"][k]]

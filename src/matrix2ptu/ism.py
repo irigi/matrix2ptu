@@ -132,12 +132,12 @@ def _jsonable(v):
 
 def save_calibration(cal: dict, path: str):
     os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
-    with open(path, "w") as f:
+    with open(path, "w", encoding="utf-8") as f:
         json.dump(_jsonable(cal), f, indent=1)
 
 
 def load_calibration(path: str) -> dict:
-    with open(path) as f:
+    with open(path, encoding="utf-8") as f:
         cal = json.load(f)
     if cal.get("format") != CAL_FORMAT:
         raise ValueError(f"{path}: not a {CAL_FORMAT} file")

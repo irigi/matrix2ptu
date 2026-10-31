@@ -96,7 +96,7 @@ def main(argv=None):
             if not args.no_verify:
                 rep["checks"] = ism.verify_reassigned(rep)
             rep.pop("_arrays")
-            with open(os.path.join(args.out_dir, f"{stem}_reassignment_report.json"), "w") as f:
+            with open(os.path.join(args.out_dir, f"{stem}_reassignment_report.json"), "w", encoding="utf-8") as f:
                 json.dump(ism._jsonable(rep), f, indent=1)
             print(json.dumps(ism._jsonable(rep["stats"]), indent=1))
             print(f"wrote {det}, {pool}")

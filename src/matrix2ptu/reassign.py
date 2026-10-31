@@ -242,5 +242,5 @@ def merge_events(pd: PhotonData, t_ph, keep, pooled: bool):
 
 def save_json(obj, path):
     os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
-    with open(path, "w") as f:
+    with open(path, "w", encoding="utf-8") as f:
         json.dump(obj, f, indent=2, default=lambda v: v.tolist() if hasattr(v, "tolist") else str(v))

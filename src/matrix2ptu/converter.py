@@ -516,7 +516,7 @@ def convert(config_path: str, only_validate_inputs: bool = False,
         "warnings": r.warnings,
         "outputs": files,
     }
-    with open(os.path.join(out_dir, f"{base}_conversion_report.json"), "w") as f:
+    with open(os.path.join(out_dir, f"{base}_conversion_report.json"), "w", encoding="utf-8") as f:
         json.dump(report, f, indent=2)
     _print_report(report)
     return {"report": report, "acq": acq, "cfg": cfg, "meta": meta}

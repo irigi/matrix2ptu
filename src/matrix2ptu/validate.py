@@ -485,7 +485,7 @@ def validate(result: dict, tif_path: str | None = None, run_flopa: bool = True) 
     base = os.path.splitext(os.path.basename(rep["outputs"][0]["file"]))[0].rsplit("_", 2)[0] \
         if rep["outputs"] else "validation"
     np.save(os.path.join(out_dir, "raw_image.npy"), raw_img)
-    with open(os.path.join(out_dir, "validation_report.json"), "w") as fh:
+    with open(os.path.join(out_dir, "validation_report.json"), "w", encoding="utf-8") as fh:
         json.dump(out, fh, indent=2)
     n_fail = sum(1 for c in out["checks"] if c["passed"] is False)
     log(f"validation finished: {len(out['checks'])} checks, {n_fail} failed")
