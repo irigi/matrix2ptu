@@ -3,16 +3,19 @@
     python -m matrix2ptu inspect  inputs/Matrix.raw [--msr inputs/Matrix.msr]
     python -m matrix2ptu inspect  inputs2/MatrixOBF.obf [--msr inputs2/MatrixOBF.msr]
     python -m matrix2ptu convert  configs/matrix.yaml [--validate] [--tif inputs/Intensity.tif]
-    python -m matrix2ptu ism-calibrate --seq CONF=beads_seq0.ptu --seq STED=beads_seq1.ptu \
-        --detect-in STED --metadata Beads.obf --out calibration.json
-    python -m matrix2ptu ism-reassign target_seq0.ptu --calibration calibration.json --sequence CONF \
-        --out-dir outdir [--metadata Target.obf]
+
+Pixel reassignment (ism-calibrate, ism-reassign) is EXPERIMENTAL and disabled by
+default: its correctness is not established yet. It runs only with --experimental.
 """
 from __future__ import annotations
 
 import argparse
 import json
 import sys
+
+ISM_DISABLED = ("pixel reassignment is experimental and disabled by default: its correctness "
+                "is not established yet. Add --experimental to run it anyway, and do not use "
+                "the results for analysis.")
 
 
 def main(argv=None):
@@ -32,7 +35,7 @@ def main(argv=None):
     c.add_argument("--dry-run", action="store_true",
                    help="decode and check parameters, write only the report (no PTU)")
 
-    k = sub.add_parser("ism-calibrate", help="bead calibration of per-element pixel-reassignment shifts")
+    k = sub.add_parser("ism-calibrate", help="EXPERIMENTAL, disabled by default: bead calibration of pixel-reassignment shifts")
     k.add_argument("--seq", action="append", required=True, metavar="NAME=PTU",
                    help="sequence name and its per-sequence detector-resolved PTU (repeat per sequence)")
     k.add_argument("--detect-in", required=True, help="sequence whose pooled image is used to find beads (STED)")
@@ -40,7 +43,7 @@ def main(argv=None):
     k.add_argument("--out", required=True, help="calibration JSON")
     k.add_argument("--isolation-nm", type=float, default=320)
 
-    r = sub.add_parser("ism-reassign", help="apply a shift calibration to a per-sequence detector-resolved PTU")
+    r = sub.add_parser("ism-reassign", help="EXPERIMENTAL, disabled by default: apply a pixel-reassignment calibration")
     r.add_argument("ptu")
     r.add_argument("--calibration", required=True)
     r.add_argument("--sequence", required=True, help="calibration sequence to use (e.g. CONF)")
@@ -49,8 +52,14 @@ def main(argv=None):
     r.add_argument("--y-rounding", choices=("nearest", "stochastic"), default="nearest")
     r.add_argument("--no-verify", action="store_true")
 
+    for p in (k, r):
+        p.add_argument("--experimental", action="store_true",
+                       help="run pixel reassignment although it is not validated")
+
     args = ap.parse_args(argv)
     try:
+        if args.cmd.startswith("ism-") and not args.experimental:
+            raise RuntimeError(ISM_DISABLED)
         if args.cmd == "inspect":
             from . import rawstream
             ev = rawstream.decode(args.raw)
@@ -73,6 +82,7 @@ def main(argv=None):
                 if any(ch["passed"] is False for ch in out["checks"]):
                     return 2
         elif args.cmd == "ism-calibrate":
+            print("WARNING: experimental pixel reassignment; do not use the results for analysis.")
             from . import ism
             seqs = dict(a.split("=", 1) for a in args.seq)
             cal = ism.calibrate(seqs, args.detect_in, args.metadata, args.out, isolation_nm=args.isolation_nm)
@@ -81,6 +91,7 @@ def main(argv=None):
             print(f"wrote {args.out}")
         elif args.cmd == "ism-reassign":
             import os
+            print("WARNING: experimental pixel reassignment; do not use the results for analysis.")
             from . import ism
             cal = ism.load_calibration(args.calibration)
             os.makedirs(args.out_dir, exist_ok=True)
