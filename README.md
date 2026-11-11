@@ -394,7 +394,7 @@ when the data are not present. GitHub Actions runs the tests on Linux
 `dist/matrix2ptu-<version>-windows-x64.zip` on any OS: the official embeddable
 Python from python.org (checksum-pinned), the dependencies as Windows wheels
 (versions from [requirements.txt](requirements.txt), without matplotlib), the
-launchers from [`packaging/windows/`](packaging/windows/), `configs/` and this
+launchers and a short `README.txt` from [`packaging/windows/`](packaging/windows/), `configs/` and this
 README. CI unzips it into a folder with a space in its name and runs the tests
 with the bundled Python. Every CI run keeps the zip as a workflow artifact.
 
