@@ -1,5 +1,7 @@
 # MATRIX pixel reassignment: assessment of the available information
 
+> **Status 2026-11-11: experimental, disabled by default.** The correctness of this pixel reassignment is in doubt and under review. `matrix2ptu convert` never applies it; the `ism-*` commands run only with `--experimental`. Do not use the results for analysis.
+
 > **Update 2026-10-22.** Pixel reassignment with a bead calibration is now done; see [ISM_REPORT.md](ISM_REPORT.md). The shift scales here (nm/pitch) use each element versus the sum of the *other* elements; ISM_REPORT uses the pooled image as reference, which gives smaller numbers (e.g. 42 instead of 51 nm/pitch for the 640 nm data). The cross-correlation in `tools/analyze_array_geometry.py` used zero padding, which biases slightly towards zero; re-measured with the corrected estimator the values change by ≤ 2 %, so the conclusions here stand.
 
 *2026-10-21. Assessment only: no pixel reassignment is implemented. Labels as in [REPORT.md](REPORT.md): [V] verified, [A] Abberior, [H] hypothesis, [U] unresolved.*

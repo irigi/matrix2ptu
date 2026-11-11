@@ -1,0 +1,70 @@
+name: windows-zip
+
+# Builds the portable Windows zip, tests it as a user would run it (unzipped into
+# a folder with a space and Czech letters in its name, bundled Python only), and keeps it as a
+# workflow artifact. On a version tag (v0.2.0 ...) it is attached to a GitHub Release.
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build-test-release:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Version
+        id: ver
+        shell: bash
+        run: |
+          v=$(python -c "import re;print(re.search(r'^version\s*=\s*\"([^\"]+)\"',open('pyproject.toml').read(),re.M).group(1))")
+          if [[ "$GITHUB_REF" == refs/tags/v* && "${GITHUB_REF_NAME#v}" != "$v" ]]; then
+            echo "tag $GITHUB_REF_NAME does not match pyproject.toml version $v"; exit 1
+          fi
+          echo "version=$v" >> "$GITHUB_OUTPUT"
+
+      - name: Build zip
+        run: python tools/build_windows_zip.py --out-dir dist
+
+      - name: Unzip into a folder with a space and Czech letters
+        shell: pwsh
+        run: |
+          $dest = Join-Path $env:RUNNER_TEMP "Uživatel Olšina"
+          Expand-Archive "dist\matrix2ptu-${{ steps.ver.outputs.version }}-windows-x64.zip" -DestinationPath $dest
+          "APP=$dest\matrix2ptu-${{ steps.ver.outputs.version }}-windows-x64" | Out-File -Append -Encoding utf8 $env:GITHUB_ENV
+
+      - name: Command works from the unzipped folder
+        shell: cmd
+        run: |
+          call "%APP%\matrix2ptu.bat" --help || exit /b 1
+          call "%APP%\matrix2ptu.bat" ism-reassign x.ptu --calibration c.json --sequence CONF --out-dir o
+          if %ERRORLEVEL% NEQ 1 exit /b 1
+          exit /b 0
+
+      - name: Tests with the bundled Python
+        shell: cmd
+        run: |
+          python -m pip install --target "%RUNNER_TEMP%\pytest_deps" pytest==9.1.1
+          "%APP%\python\python.exe" -c "import sys, matrix2ptu, os; print(matrix2ptu.__file__); sys.path.append(os.environ['RUNNER_TEMP'] + r'\pytest_deps'); import pytest; sys.exit(pytest.main(['-q', 'tests']))"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: matrix2ptu-${{ steps.ver.outputs.version }}-windows-x64
+          path: dist/matrix2ptu-${{ steps.ver.outputs.version }}-windows-x64.zip
+
+      - name: Attach to GitHub Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" "dist/matrix2ptu-${{ steps.ver.outputs.version }}-windows-x64.zip" \
+            --title "matrix2ptu ${{ steps.ver.outputs.version }}" --generate-notes

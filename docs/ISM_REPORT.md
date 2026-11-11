@@ -1,5 +1,7 @@
 # Pixel reassignment of MATRIX FLIM data with a bead calibration (inputs3: Beads, Dense)
 
+> **Status 2026-11-11: experimental, disabled by default.** The correctness of this pixel reassignment is in doubt and under review. `matrix2ptu convert` never applies it; the `ism-*` commands run only with `--experimental`. Do not use the results for analysis.
+
 Date: 2026-10-22. Code: `src/matrix2ptu/{ism,beadcal,reassign}.py`, pipeline
 `tools/ism_inputs3.py`, figures `tools/ism_figures.py`. Outputs:
 `outputs/inputs3_reassignment/` (inventory in its `README.md`).

@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "matrix2ptu"
 version = "0.1.0"
-description = "Convert Abberior MATRIX (SPAD23) .raw / streamed .obf photon streams to PicoQuant PTU, with optional pixel reassignment"
+description = "Convert Abberior MATRIX (SPAD23) .raw / streamed .obf photon streams to PicoQuant PTU"
 readme = "README.md"
 authors = [{ name = "Jan Olšina" }]
 requires-python = ">=3.10"

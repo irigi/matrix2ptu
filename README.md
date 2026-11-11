@@ -2,8 +2,7 @@
 
 **Convert Abberior MATRIX photon streams (`.raw` or streamed `.obf`) into
 event-based PicoQuant `.ptu` files**, ready for FLIM analysis in FLOPA,
-SymPhoTime or any PTU reader. Optionally, apply bead-calibrated pixel
-reassignment (ISM) to the converted data.
+SymPhoTime or any PTU reader.
 
 The Abberior **MATRIX** detector is a 23-element SPAD array (PI Imaging SPAD23)
 with a time-to-digital converter (TDC) per element. Imspector can stream its
@@ -19,7 +18,7 @@ plus frame and line markers.
 [Configuration](#configuration) ·
 [Output files](#output-files) ·
 [Opening the PTU files](#opening-the-ptu-files) ·
-[Pixel reassignment](#pixel-reassignment-ism) ·
+[Pixel reassignment (experimental, off)](#pixel-reassignment-ism--experimental-disabled-by-default) ·
 [Performance](#performance) ·
 [Documentation](#documentation) ·
 [Development](#development)
@@ -45,7 +44,9 @@ plus frame and line markers.
   disagreements are flagged as warnings.
 * **Validation** of the output with independent readers (`ptufile`, FLOPA's
   `tttrkit`) against the source data and Imspector's own images.
-* **Pixel reassignment (ISM)** with per-element shifts calibrated on beads.
+* **Pixel reassignment (ISM)**: experimental and **disabled by default**; its
+  correctness is not established yet ([below](#pixel-reassignment-ism--experimental-disabled-by-default)).
+  `convert` never applies it.
 
 Image-type files (`.msr`, Lightbox image `.obf`) contain no photon events and
 cannot be converted to event-based PTU; see [docs/OBF_REPORT.md](docs/OBF_REPORT.md).
@@ -54,43 +55,51 @@ cannot be converted to event-based PTU; see [docs/OBF_REPORT.md](docs/OBF_REPORT
 
 ## Installation
 
-Requires **Python 3.12 or newer** (the converter core runs on 3.10+, but the
-validation readers need 3.12). The core depends only on `numpy` and `pyyaml`.
+**Windows:** download the portable zip; Python is included.
+**Linux / macOS:** requires **Python 3.12 or newer** (the converter core runs
+on 3.10+, but the validation readers need 3.12). The core depends only on
+`numpy` and `pyyaml`.
 
-### Windows 11
+### Windows (portable zip, nothing to install)
 
-1. **Install Python** from <https://www.python.org/downloads/windows/>
-   (the "Windows installer (64-bit)"). On the first installer screen, tick
-   **"Add python.exe to PATH"**.
-2. **Get matrix2ptu**, either
-   * on the GitHub page of this repository: **Code → Download ZIP**, then
-     unzip it to a folder of your choice (for example `C:\matrix2ptu`), or
-   * with Git: `git clone https://github.com/irigi/matrix2ptu.git`
-3. **Double-click `install_windows.bat`** in that folder. It creates a private
-   Python environment (`.venv`) inside the folder and installs everything into
-   it; nothing else on the computer is changed. It ends with
-   *"matrix2ptu is installed."*
-4. **Double-click `matrix2ptu_terminal.bat`**. It opens a terminal in the
-   folder where the `matrix2ptu` command works:
+The Windows version is a single zip file that already contains Python and all
+the packages. Nothing is installed on the computer and no administrator rights
+are needed.
+
+1. **Download** `matrix2ptu-<version>-windows-x64.zip` from the
+   [Releases page](https://github.com/irigi/matrix2ptu/releases/latest)
+   (under *Assets*).
+2. **Unzip** it anywhere, for example to `C:\matrix2ptu`
+   (right-click → *Extract All…*). You get a folder
+   `matrix2ptu-<version>-windows-x64` containing `matrix2ptu.bat`,
+   `matrix2ptu_terminal.bat`, `configs\` and `python\`.
+3. **Double-click `matrix2ptu_terminal.bat`**. A terminal opens in that folder
+   with the `matrix2ptu` command ready. If Windows shows *"Windows protected
+   your PC"*, click *More info → Run anyway* (the file comes from the internet
+   and is not signed).
+4. **Run a conversion** (here for data in `D:\Data\2026-11-11`; see the
+   [Quick start](#quick-start) for writing the config):
    ```bat
    matrix2ptu --help
-   matrix2ptu convert configs\my_data.yaml --dry-run
+   matrix2ptu inspect D:\Data\2026-11-11\Matrix.raw --msr D:\Data\2026-11-11\Matrix.msr
+   copy configs\matrix.yaml D:\Data\2026-11-11\matrix.yaml
+   notepad D:\Data\2026-11-11\matrix.yaml
+   matrix2ptu convert D:\Data\2026-11-11\matrix.yaml --dry-run
+   matrix2ptu convert D:\Data\2026-11-11\matrix.yaml --validate
    ```
+   In the config, use absolute paths (relative paths are relative to the
+   folder the terminal is in), e.g.
+   `raw: 'D:\Data\2026-11-11\Matrix.raw'` and
+   `directory: 'D:\Data\2026-11-11\ptu'`.
 
-Updating: replace the folder contents with a new download (or `git pull`) and
-run `install_windows.bat` again. If you move the folder, run
-`install_windows.bat -Recreate` from a terminal in the new place.
+`matrix2ptu.bat` can also be called with its full path from any terminal or
+script, e.g. `C:\matrix2ptu\matrix2ptu-0.1.0-windows-x64\matrix2ptu.bat convert my.yaml`.
 
-Installer options (from a terminal: `install_windows.bat -Dev`, etc.):
-
-| option | effect |
-|---|---|
-| `-Dev` | also install `pytest`, to run the tests |
-| `-NoValidate` | install only the converter, without the validation readers |
-| `-Recreate` | delete `.venv` and build it again from scratch |
+Updating: download the new zip and unzip it next to (or instead of) the old
+folder. Your own configs and data are not inside the folder, so nothing is lost.
 
 Paths in config files may use either `/` or `\`. If a path contains spaces or
-starts with a drive letter, writing it in single quotes is safest:
+starts with a drive letter, write it in single quotes:
 `raw: 'D:\Data 2026\Matrix.raw'` (do not use double quotes around Windows paths;
 YAML treats `\` inside double quotes as an escape character).
 
@@ -185,8 +194,8 @@ Without installing, the package also runs as `PYTHONPATH=src python -m matrix2pt
 |---|---|
 | `matrix2ptu inspect STREAM [--msr MSR]` | summarise a `.raw` / streamed `.obf` (and its metadata) |
 | `matrix2ptu convert CONFIG [--dry-run] [--validate] [--tif TIF] [--no-flopa]` | convert according to a YAML config |
-| `matrix2ptu ism-calibrate --seq NAME=PTU ... --detect-in NAME --out CAL.json [--metadata OBF]` | per-element shifts from a bead acquisition |
-| `matrix2ptu ism-reassign PTU --calibration CAL.json --sequence NAME --out-dir DIR [--metadata OBF]` | apply a shift calibration to one sequence |
+| `matrix2ptu ism-calibrate ... --experimental` | **experimental, disabled by default**: pixel-reassignment calibration ([below](#pixel-reassignment-ism--experimental-disabled-by-default)) |
+| `matrix2ptu ism-reassign ... --experimental` | **experimental, disabled by default**: apply pixel reassignment |
 
 * `--dry-run`: decode and check the parameters, write only the report.
 * `--validate`: run the validation checks after the conversion.
@@ -288,7 +297,12 @@ same y-line), because SymPhoTime cannot combine accumulations.
 
 ---
 
-## Pixel reassignment (ISM)
+## Pixel reassignment (ISM) — experimental, disabled by default
+
+> **Do not use for analysis.** The pixel reassignment is not considered
+> correct yet. `matrix2ptu convert` never applies it, and the `ism-calibrate` /
+> `ism-reassign` commands refuse to run unless `--experimental` is added.
+> The description below documents the current experimental state.
 
 The 23 detector elements see the sample from slightly shifted positions.
 Pixel reassignment moves each photon by its element's shift, calibrated on an
@@ -303,13 +317,13 @@ matrix2ptu convert configs/dense_obf_split.yaml
 # 2. per-element shifts from isolated beads, one table per sequence
 matrix2ptu ism-calibrate --seq CONF=<beads seq0 detector-resolved PTU> \
     --seq STED=<beads seq1 detector-resolved PTU> --detect-in STED \
-    --metadata data/Beads.obf --out my_calibration.json
+    --metadata data/Beads.obf --out my_calibration.json --experimental
 
 # 3. apply to one sequence of the target
 #    (writes detector-resolved + pooled reassigned PTUs, checks and a report)
 matrix2ptu ism-reassign <target seq0 detector-resolved PTU> \
     --calibration my_calibration.json --sequence CONF \
-    --out-dir outputs/reassigned --metadata data/Dense.obf
+    --out-dir outputs/reassigned --metadata data/Dense.obf --experimental
 ```
 
 (On Windows, write each command on one line, or end lines with `^` instead of `\`.)
@@ -339,7 +353,7 @@ With `--validate`: 5 s / 1.2 GB and 52 s / 2.7 GB. See
 | [docs/REPORT.md](docs/REPORT.md) | the `.raw` stream format, how the conversion works, validation, limitations |
 | [docs/OBF_REPORT.md](docs/OBF_REPORT.md) | streamed `.obf` files, `.obf` → PTU, validation on 640 nm and 561 nm (CONF + STED) data, RAW vs OBF |
 | [docs/PIXEL_REASSIGNMENT.md](docs/PIXEL_REASSIGNMENT.md) | what the available geometry and shift information supports for pixel reassignment |
-| [docs/ISM_REPORT.md](docs/ISM_REPORT.md) | bead calibration and pixel reassignment: method, validation, results |
+| [docs/ISM_REPORT.md](docs/ISM_REPORT.md) | bead calibration and pixel reassignment (experimental, disabled by default): method, validation, results |
 | [docs/BACKLOG.md](docs/BACKLOG.md) | open items and ideas |
 
 ---
@@ -372,8 +386,21 @@ reassignment works on the per-sequence detector-resolved PTUs instead
 (`reassign.load_photons`), so it can be applied to any converted file.
 
 **Tests:** `pytest -q`. Tests that need the measurement datasets are skipped
-when the data are not present. GitHub Actions runs the tests on Linux and on
-Windows (the Windows job installs with `install_windows.ps1`).
+when the data are not present. GitHub Actions runs the tests on Linux
+([tests.yml](.github/workflows/tests.yml)) and builds and tests the Windows zip
+([windows-zip.yml](.github/workflows/windows-zip.yml)).
+
+**Windows zip:** `python tools/build_windows_zip.py` builds
+`dist/matrix2ptu-<version>-windows-x64.zip` on any OS: the official embeddable
+Python from python.org (checksum-pinned), the dependencies as Windows wheels
+(versions from [requirements.txt](requirements.txt), without matplotlib), the
+launchers and a short `README.txt` from [`packaging/windows/`](packaging/windows/), `configs/` and this
+README. CI unzips it into a folder with a space in its name and runs the tests
+with the bundled Python. Every CI run keeps the zip as a workflow artifact.
+
+**Releasing:** set `version` in `pyproject.toml`, commit, then
+`git tag v<version> && git push origin v<version>`. The workflow checks that
+the tag matches the version and attaches the zip to a new GitHub Release.
 
 Additional checks used for the reports ([OBF_REPORT §5–6](docs/OBF_REPORT.md)):
 

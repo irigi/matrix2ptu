@@ -472,3 +472,13 @@ def test_reassign_refuses_pooled_or_multi_sequence(tmp_path):
     _split_ptu(tmp_path / "m.ptu", [(0, 0, 1, 1)], seqs="0:CONF:x1;1:STED:x3")
     with pytest.raises(ValueError, match="one PTU per sequence"):
         ism.scan_info(str(tmp_path / "m.ptu"))
+
+
+def test_ism_commands_disabled_without_experimental(tmp_path, capsys):
+    from matrix2ptu.__main__ import main
+    rc = main(["ism-reassign", str(tmp_path / "x.ptu"), "--calibration", "c.json",
+               "--sequence", "CONF", "--out-dir", str(tmp_path / "o")])
+    assert rc == 1 and "disabled by default" in capsys.readouterr().err
+    assert not (tmp_path / "o").exists()
+    rc = main(["ism-calibrate", "--seq", "CONF=x.ptu", "--detect-in", "CONF", "--out", "c.json"])
+    assert rc == 1 and "--experimental" in capsys.readouterr().err
